@@ -11,6 +11,9 @@ import { teeToStdoutAndCollect, teeToStderrAndCollect, teeToStdoutWithMarkdownAn
 import { stopSpinner, isSpinnerRunning } from "./spinner";
 import { getProcessManager } from "./process-manager";
 import { createStreamingRenderer, type StreamingMarkdownRenderer } from "./markdown-renderer";
+import { getRegisteredAdapters } from "./adapters";
+import { CommandError } from "./errors";
+import { escapeShellArg } from "./security";
 
 /**
  * Module-level reference to the current child process
@@ -145,13 +148,98 @@ export function hasInteractiveMarker(filePath: string): boolean {
 export function resolveCommand(filePath: string): string {
   const fromFilename = parseCommandFromFilename(filePath);
   if (fromFilename) {
-    return fromFilename;
+    const candidate = fromFilename.trim();
+    if (!candidate) {
+      throw new CommandError(
+        `Unable to resolve command from "${filePath}". The command segment is empty.`,
+        {
+          errorCode: "COMMAND_INVALID",
+          context: { filePath, suggestion: "Use --_command <tool> or rename to task.<tool>.md" },
+        }
+      );
+    }
+
+    if (!isValidCommandToken(candidate)) {
+      const didYouMean = formatDidYouMean(candidate);
+      throw new CommandError(
+        `Invalid command "${candidate}" in filename "${filePath}".${didYouMean} ` +
+        "Use a command token with letters, numbers, dots, underscores, or hyphens.",
+        {
+          errorCode: "COMMAND_INVALID",
+          context: { filePath, command: candidate },
+        }
+      );
+    }
+
+    return candidate;
   }
 
-  throw new Error(
-    "No command specified. Use --_command flag, " +
-    "or name your file like 'task.claude.md'"
+  throw new CommandError(
+    `No command specified for "${filePath}". ` +
+    "Use --_command <tool>, or name your file like 'task.claude.md'.",
+    {
+      errorCode: "COMMAND_MISSING",
+      context: {
+        filePath,
+        knownCommands: getRegisteredAdapters().join(", "),
+        suggestion: "Pass --_command claude (or another installed tool).",
+      },
+    }
   );
+}
+
+const VALID_COMMAND_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+function isValidCommandToken(command: string): boolean {
+  return VALID_COMMAND_TOKEN.test(command);
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp: number[][] = Array.from({ length: rows }, (_, i) =>
+    Array.from({ length: cols }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i]![j] = Math.min(
+        dp[i - 1]![j]! + 1,
+        dp[i]![j - 1]! + 1,
+        dp[i - 1]![j - 1]! + cost
+      );
+    }
+  }
+
+  return dp[rows - 1]![cols - 1]!;
+}
+
+function getCommandSuggestions(command: string, max: number = 3): string[] {
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) return [];
+
+  const candidates = Array.from(new Set(getRegisteredAdapters().map((c) => c.toLowerCase())));
+  const ranked = candidates
+    .map((candidate) => ({ candidate, distance: levenshteinDistance(normalized, candidate) }))
+    .sort((a, b) => a.distance - b.distance || a.candidate.localeCompare(b.candidate));
+
+  const threshold = Math.max(2, Math.ceil(normalized.length * 0.4));
+  return ranked
+    .filter(({ candidate, distance }) =>
+      candidate.startsWith(normalized) ||
+      normalized.startsWith(candidate) ||
+      distance <= threshold
+    )
+    .slice(0, max)
+    .map(({ candidate }) => candidate);
+}
+
+function formatDidYouMean(command: string): string {
+  const suggestions = getCommandSuggestions(command);
+  if (suggestions.length === 0) return "";
+  if (suggestions.length === 1) return `Did you mean '${suggestions[0]}'?`;
+  return `Did you mean one of: ${suggestions.map((s) => `'${s}'`).join(", ")}?`;
 }
 
 /**
@@ -328,6 +416,17 @@ function normalizeCaptureMode(mode: boolean | CaptureMode): CaptureMode {
   return mode;
 }
 
+function hasNullByte(value: string): boolean {
+  return value.includes("\0");
+}
+
+function formatSpawnPreview(command: string, args: string[]): string {
+  const mode = process.platform === "win32" ? "win32" : "posix";
+  return [command, ...args]
+    .map((arg) => escapeShellArg(arg, mode))
+    .join(" ");
+}
+
 /**
  * Execute command with positional arguments
  * Positionals are either passed as-is or mapped to flags via $N mappings
@@ -345,13 +444,34 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   const { command, args, positionals, positionalMappings, captureOutput, env, captureStderr = false, rawOutput = false } = ctx;
 
   const mode = normalizeCaptureMode(captureOutput);
+  const normalizedCommand = command.trim();
+
+  if (!normalizedCommand) {
+    console.error("Command not found: empty command value.");
+    console.error("Use --_command <tool> or name your file like task.<tool>.md.");
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
+
+  if (!isValidCommandToken(normalizedCommand)) {
+    const didYouMean = formatDidYouMean(normalizedCommand);
+    console.error(`Invalid command token: '${normalizedCommand}'.`);
+    if (didYouMean) {
+      console.error(didYouMean);
+    }
+    console.error("Use a command/binary name without spaces. Example: --_command claude");
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
 
   // Pre-flight check: verify the command exists
-  const binaryPath = Bun.which(command);
+  const binaryPath = Bun.which(normalizedCommand);
   if (!binaryPath) {
-    console.error(`Command not found: '${command}'`);
-    console.error(`This agent requires '${command}' to be installed and available in your PATH.`);
-    console.error(`Please install it and try again.`);
+    const didYouMean = formatDidYouMean(normalizedCommand);
+    console.error(`Command not found: '${normalizedCommand}'`);
+    if (didYouMean) {
+      console.error(didYouMean);
+    }
+    console.error(`This agent requires '${normalizedCommand}' to be installed and available in your PATH.`);
+    console.error("Install it, or override with --_command <installed-binary>.");
     // Return empty process-like object for backward compatibility
     return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
   }
@@ -375,6 +495,14 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     }
   }
 
+  const invalidArgIndex = finalArgs.findIndex(hasNullByte);
+  if (invalidArgIndex !== -1) {
+    console.error(
+      `Rejected command argument at index ${invalidArgIndex}: null bytes are not allowed in spawned process arguments.`
+    );
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
+
   // Merge process.env with provided env
   const runEnv = env
     ? { ...process.env, ...env }
@@ -386,7 +514,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   const shouldPipeStdout = mode === "capture" || mode === "tee" || spinnerActive;
   const shouldPipeStderr = (mode === "capture" || mode === "tee") && captureStderr;
 
-  const proc = Bun.spawn([command, ...finalArgs], {
+  const proc = Bun.spawn([normalizedCommand, ...finalArgs], {
     stdout: shouldPipeStdout ? "pipe" : "inherit",
     stderr: shouldPipeStderr ? "pipe" : "inherit",
     stdin: "inherit",
@@ -395,7 +523,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
 
   // Register with ProcessManager for centralized lifecycle management
   const pm = getProcessManager();
-  pm.register(proc, command);
+  pm.register(proc, formatSpawnPreview(normalizedCommand, finalArgs));
 
   // Store reference for legacy signal handling (deprecated)
   currentChildProcess = proc;

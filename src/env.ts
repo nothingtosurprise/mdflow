@@ -11,7 +11,9 @@
  * 4. .env.[NODE_ENV].local (environment-specific local overrides)
  */
 
-import { join, dirname } from "path";
+import { join } from "path";
+import { ConfigError, getErrorMessage } from "./errors";
+import { detectSensitiveEnvVars } from "./security";
 
 /**
  * Load environment files from a directory using Bun's native file reading
@@ -41,30 +43,82 @@ export async function loadEnvFiles(
   for (const envFile of envFiles) {
     const envPath = join(directory, envFile);
     const file = Bun.file(envPath);
+    let exists = false;
 
-    if (await file.exists()) {
-      try {
-        const content = await file.text();
-        const vars = parseEnvFile(content);
-
-        for (const [key, value] of Object.entries(vars)) {
-          // Don't override pre-existing env vars (CLI/system take precedence)
-          // But DO allow later .env files to override earlier .env files
-          if (!preExistingKeys.has(key) || loadedKeys.has(key)) {
-            process.env[key] = value;
-            loadedKeys.add(key);
-          }
+    try {
+      exists = await file.exists();
+    } catch (err) {
+      throw new ConfigError(
+        `Failed to check env file "${envPath}".`,
+        {
+          errorCode: "ENV_FILE_READ_FAILED",
+          context: {
+            envPath,
+            directory,
+            suggestion: "Verify directory permissions and confirm the path exists.",
+          },
+          cause: err,
         }
+      );
+    }
 
-        loadedCount++;
-        if (verbose) {
-          console.error(`[env] Loaded: ${envFile} (${Object.keys(vars).length} vars)`);
+    if (!exists) {
+      continue;
+    }
+
+    let content = "";
+    try {
+      content = await file.text();
+    } catch (err) {
+      throw new ConfigError(
+        `Failed to read env file "${envPath}".`,
+        {
+          errorCode: "ENV_FILE_READ_FAILED",
+          context: {
+            envPath,
+            directory,
+            suggestion: "Check file permissions (e.g. chmod 600/644) and ensure the file is not locked.",
+          },
+          cause: err,
         }
-      } catch (err) {
-        if (verbose) {
-          console.error(`[env] Failed to load ${envFile}: ${(err as Error).message}`);
+      );
+    }
+
+    try {
+      const vars = parseEnvFile(content);
+      const sensitiveKeys = detectSensitiveEnvVars(vars);
+
+      if (sensitiveKeys.length > 0) {
+        console.error(
+          `[env][security] ${envFile} contains sensitive-looking keys: ${sensitiveKeys.join(", ")}`
+        );
+      }
+
+      for (const [key, value] of Object.entries(vars)) {
+        // Don't override pre-existing env vars (CLI/system take precedence)
+        // But DO allow later .env files to override earlier .env files
+        if (!preExistingKeys.has(key) || loadedKeys.has(key)) {
+          process.env[key] = value;
+          loadedKeys.add(key);
         }
       }
+
+      loadedCount++;
+      if (verbose) {
+        console.error(`[env] Loaded: ${envFile} (${Object.keys(vars).length} vars)`);
+      }
+    } catch (err) {
+      throw new ConfigError(
+        `Failed to parse env file "${envPath}": ${getErrorMessage(err)}`,
+        {
+          errorCode: "CONFIG_FILE_PARSE_FAILED",
+          context: {
+            envPath,
+            suggestion: "Ensure each line is KEY=value and quoted multiline values are closed.",
+          },
+          cause: err,
+        }
+      );
     }
   }
 
@@ -162,8 +216,23 @@ export async function getEnvFilesInDirectory(directory: string): Promise<string[
   const existing: string[] = [];
   for (const envFile of envFiles) {
     const envPath = join(directory, envFile);
-    if (await Bun.file(envPath).exists()) {
-      existing.push(envFile);
+    try {
+      if (await Bun.file(envPath).exists()) {
+        existing.push(envFile);
+      }
+    } catch (err) {
+      throw new ConfigError(
+        `Failed to inspect env file "${envPath}".`,
+        {
+          errorCode: "ENV_FILE_READ_FAILED",
+          context: {
+            envPath,
+            directory,
+            suggestion: "Verify directory/file permissions before retrying.",
+          },
+          cause: err,
+        }
+      );
     }
   }
 

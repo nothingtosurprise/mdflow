@@ -1,5 +1,5 @@
 import { resolve, dirname, relative, basename, join } from "path";
-import { realpathSync } from "fs";
+import { realpathSync, existsSync } from "fs";
 import { chmod, unlink } from "fs/promises";
 import { homedir, platform, tmpdir } from "os";
 import { Glob } from "bun";
@@ -11,6 +11,8 @@ import { Semaphore, DEFAULT_CONCURRENCY_LIMIT } from "./concurrency";
 import { substituteTemplateVars } from "./template";
 import { parseImports as parseImportsSafe, hasImportsInContent } from "./imports-parser";
 import type { ImportAction, ExecutableCodeFenceAction } from "./imports-types";
+import { ImportError, getErrorMessage } from "./errors";
+import { escapeShellArg, sanitizePath, validateUrl } from "./security";
 
 // Lazy-load ignore package (only needed for glob imports)
 type IgnoreFactory = typeof import("ignore");
@@ -168,7 +170,30 @@ export interface ImportContext {
    * When true, only expand file/url imports; leave commands for later.
    */
   _contentOnly?: boolean;
+  /**
+   * Internal cache of resolved project root for path traversal checks.
+   * This keeps path policy stable across recursive import expansion.
+   */
+  _projectRoot?: string;
 }
+
+const PROJECT_ROOT_MARKERS = [
+  ".git",
+  "package.json",
+  "mdflow.config.yaml",
+  ".mdflow.yaml",
+  ".mdflow.json",
+];
+
+const URL_ALLOWLIST_ENV_KEYS = [
+  "MDFLOW_IMPORT_URL_ALLOWLIST",
+  "MDFLOW_URL_ALLOWLIST",
+] as const;
+
+const URL_BLOCKLIST_ENV_KEYS = [
+  "MDFLOW_IMPORT_URL_BLOCKLIST",
+  "MDFLOW_URL_BLOCKLIST",
+] as const;
 
 /**
  * File extensions that are known to be binary
@@ -242,9 +267,22 @@ export async function isBinaryFileAsync(filePath: string): Promise<boolean> {
   }
 
   // Read first 8KB and check for null bytes
-  const file = Bun.file(filePath);
-  const buffer = await file.slice(0, BINARY_CHECK_SIZE).arrayBuffer();
-  const bytes = new Uint8Array(buffer);
+  let bytes: Uint8Array;
+  try {
+    const file = Bun.file(filePath);
+    const buffer = await file.slice(0, BINARY_CHECK_SIZE).arrayBuffer();
+    bytes = new Uint8Array(buffer);
+  } catch (err) {
+    throw createImportError(
+      `Failed to inspect imported file "${filePath}" for binary content.`,
+      "IMPORT_FILE_READ_FAILED",
+      {
+        filePath,
+        suggestion: "Verify the file exists and is readable before importing it.",
+      },
+      err
+    );
+  }
 
   for (let i = 0; i < bytes.length; i++) {
     if (bytes[i] === 0) {
@@ -281,6 +319,19 @@ function getCommandTimeout(): number {
 /** Maximum command output size in characters (~25k tokens) */
 const MAX_COMMAND_OUTPUT_SIZE = 100_000;
 
+function createImportError(
+  message: string,
+  errorCode: "IMPORT_FILE_NOT_FOUND" | "IMPORT_FILE_READ_FAILED" | "IMPORT_BINARY_FILE" | "IMPORT_CIRCULAR_DEPENDENCY" | "IMPORT_COMMAND_FAILED" | "IMPORT_URL_FETCH_FAILED",
+  context: Record<string, string | number | boolean | null | undefined>,
+  cause?: unknown
+): ImportError {
+  return new ImportError(message, {
+    errorCode,
+    context,
+    cause,
+  });
+}
+
 /** Regex to strip ANSI escape codes from command output */
 // eslint-disable-next-line no-control-regex
 const ANSI_ESCAPE_REGEX = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g;
@@ -296,18 +347,74 @@ function expandTilde(filePath: string): string {
 }
 
 /**
- * Resolve an import path relative to the current file's directory
+ * Discover a project root for import path boundary checks.
+ * Preference order:
+ * 1. Nearest directory containing common project markers (.git/package.json/etc.)
+ * 2. Filesystem root as a permissive fallback when no marker exists.
  */
-function resolveImportPath(importPath: string, currentFileDir: string): string {
-  const expanded = expandTilde(importPath);
+function detectProjectRoot(startDir: string): string {
+  let current = resolve(startDir);
+  let previous = "";
 
-  // Absolute paths (including expanded ~) stay as-is
-  if (expanded.startsWith("/")) {
-    return expanded;
+  while (current !== previous) {
+    for (const marker of PROJECT_ROOT_MARKERS) {
+      if (existsSync(join(current, marker))) {
+        return current;
+      }
+    }
+
+    previous = current;
+    current = dirname(current);
   }
 
-  // Relative paths resolve from current file's directory
-  return resolve(currentFileDir, expanded);
+  return previous || resolve(startDir);
+}
+
+function getProjectRoot(currentFileDir: string, importCtx?: ImportContext): string {
+  if (importCtx?._projectRoot) {
+    return importCtx._projectRoot;
+  }
+
+  const discovered = importCtx?.invocationCwd
+    ? resolve(importCtx.invocationCwd)
+    : detectProjectRoot(currentFileDir);
+
+  if (importCtx) {
+    importCtx._projectRoot = discovered;
+  }
+
+  return discovered;
+}
+
+/**
+ * Resolve an import path relative to the current file's directory
+ */
+function resolveImportPath(importPath: string, currentFileDir: string, projectRoot: string): string {
+  return sanitizePath(importPath, {
+    baseDir: currentFileDir,
+    projectRoot,
+  });
+}
+
+function parseListFromEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(/[,\n]/g)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function readUrlPolicyList(
+  env: Record<string, string | undefined>,
+  keys: readonly string[]
+): string[] {
+  for (const key of keys) {
+    const value = env[key];
+    if (value) {
+      return parseListFromEnv(value);
+    }
+  }
+  return [];
 }
 
 /**
@@ -460,7 +567,14 @@ function extractSymbol(content: string, symbolName: string): string {
     return lines.slice(startLine).join("\n");
   }
 
-  throw new Error(`Symbol "${symbolName}" not found in file`);
+  throw createImportError(
+    `Symbol "${symbolName}" not found in imported file content.`,
+    "IMPORT_FILE_READ_FAILED",
+    {
+      symbol: symbolName,
+      suggestion: "Check the symbol name and ensure it is declared in the imported file.",
+    }
+  );
 }
 
 /**
@@ -487,14 +601,56 @@ async function loadGitignore(dir: string): Promise<ReturnType<Awaited<ReturnType
     const gitignorePath = resolve(currentDir, ".gitignore");
     const file = Bun.file(gitignorePath);
 
-    if (await file.exists()) {
-      const content = await file.text();
-      ig.add(content.split("\n").filter(line => line.trim() && !line.startsWith("#")));
+    let gitignoreExists = false;
+    try {
+      gitignoreExists = await file.exists();
+    } catch (err) {
+      throw createImportError(
+        `Failed to inspect ignore file "${gitignorePath}".`,
+        "IMPORT_FILE_READ_FAILED",
+        {
+          filePath: gitignorePath,
+          suggestion: "Check read permissions for this directory and .gitignore file.",
+        },
+        err
+      );
+    }
+
+    if (gitignoreExists) {
+      try {
+        const content = await file.text();
+        ig.add(content.split("\n").filter(line => line.trim() && !line.startsWith("#")));
+      } catch (err) {
+        throw createImportError(
+          `Failed to read ignore rules from "${gitignorePath}".`,
+          "IMPORT_FILE_READ_FAILED",
+          {
+            filePath: gitignorePath,
+            suggestion: "Ensure .gitignore is readable and encoded as UTF-8 text.",
+          },
+          err
+        );
+      }
     }
 
     // Stop at git root
     const gitDir = resolve(currentDir, ".git");
-    if (await Bun.file(gitDir).exists()) {
+    let gitDirExists = false;
+    try {
+      gitDirExists = await Bun.file(gitDir).exists();
+    } catch (err) {
+      throw createImportError(
+        `Failed while checking git root marker "${gitDir}".`,
+        "IMPORT_FILE_READ_FAILED",
+        {
+          filePath: gitDir,
+          suggestion: "Verify directory permissions while resolving import glob roots.",
+        },
+        err
+      );
+    }
+
+    if (gitDirExists) {
       break;
     }
 
@@ -593,13 +749,38 @@ function inferContentType(content: string, url: string): "markdown" | "json" | "
  */
 async function processUrlImport(
   url: string,
-  verbose: boolean
+  verbose: boolean,
+  importCtx?: ImportContext
 ): Promise<string> {
+  const policyEnv = importCtx?.env ?? process.env;
+  const allowlist = readUrlPolicyList(policyEnv, URL_ALLOWLIST_ENV_KEYS);
+  const blocklist = readUrlPolicyList(policyEnv, URL_BLOCKLIST_ENV_KEYS);
+
+  let validatedUrl: URL;
+  try {
+    validatedUrl = validateUrl(url, { allowlist, blocklist });
+  } catch (err) {
+    throw createImportError(
+      `Blocked URL import "${url}": ${getErrorMessage(err)}`,
+      "IMPORT_URL_FETCH_FAILED",
+      {
+        url,
+        allowlistEnabled: allowlist.length > 0,
+        blocklistEnabled: blocklist.length > 0,
+        suggestion:
+          "Adjust MDFLOW_IMPORT_URL_ALLOWLIST/MDFLOW_IMPORT_URL_BLOCKLIST or import from an allowed host.",
+      },
+      err
+    );
+  }
+
+  const targetUrl = validatedUrl.href;
+
   // Always log URL fetches to stderr for visibility
-  console.error(`[imports] Fetching: ${url}`);
+  console.error(`[imports] Fetching: ${targetUrl}`);
 
   try {
-    const response = await resilientFetch(url, {
+    const response = await resilientFetch(targetUrl, {
       headers: {
         "Accept": "text/markdown, application/json, text/plain, */*",
         "User-Agent": "mdflow/1.0",
@@ -607,7 +788,15 @@ async function processUrlImport(
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      throw createImportError(
+        `Failed to fetch URL import "${targetUrl}": HTTP ${response.status} ${response.statusText}.`,
+        "IMPORT_URL_FETCH_FAILED",
+        {
+          url: targetUrl,
+          status: response.status,
+          suggestion: "Check the URL, authentication, or network connectivity.",
+        }
+      );
     }
 
     const contentType = response.headers.get("content-type");
@@ -619,21 +808,35 @@ async function processUrlImport(
     }
 
     // Content-type missing or generic - infer from content
-    const inferred = inferContentType(content, url);
+    const inferred = inferContentType(content, targetUrl);
     if (inferred === "markdown" || inferred === "json") {
       return content.trim();
     }
 
     // Cannot determine content type - reject
-    throw new Error(
+    throw createImportError(
       `URL returned unsupported content type: ${contentType || "unknown"}. ` +
-      `Only markdown and JSON are allowed. URL: ${url}`
+      `Only markdown and JSON are allowed. URL: ${targetUrl}`,
+      "IMPORT_URL_FETCH_FAILED",
+      {
+        url: targetUrl,
+        contentType: contentType || "unknown",
+        suggestion: "Use a URL that serves markdown/json/plain text content.",
+      }
     );
   } catch (err) {
-    if (err instanceof Error && err.message.includes("unsupported content type")) {
+    if (err instanceof ImportError) {
       throw err;
     }
-    throw new Error(`Failed to fetch URL: ${url} - ${(err as Error).message}`);
+    throw createImportError(
+      `Failed to fetch URL import "${targetUrl}": ${getErrorMessage(err)}`,
+      "IMPORT_URL_FETCH_FAILED",
+      {
+        url: targetUrl,
+        suggestion: "Check the URL, proxy settings, and internet connectivity, then retry.",
+      },
+      err
+    );
   }
 }
 
@@ -684,13 +887,32 @@ function extractGlobBaseDir(pattern: string, currentFileDir: string): string {
 async function processGlobImport(
   pattern: string,
   currentFileDir: string,
+  projectRoot: string,
   verbose: boolean
 ): Promise<string> {
   const resolvedPattern = expandTilde(pattern);
 
   // Calculate the actual base directory for the glob
   // This handles patterns like "../../**/*.rs" by resolving the static prefix
-  const globBaseDir = extractGlobBaseDir(resolvedPattern, currentFileDir);
+  const unsafeGlobBaseDir = extractGlobBaseDir(resolvedPattern, currentFileDir);
+  let globBaseDir: string;
+  try {
+    globBaseDir = sanitizePath(unsafeGlobBaseDir, {
+      baseDir: currentFileDir,
+      projectRoot,
+    });
+  } catch (err) {
+    throw createImportError(
+      `Glob import "${pattern}" escapes project root "${projectRoot}".`,
+      "IMPORT_FILE_READ_FAILED",
+      {
+        pattern,
+        projectRoot,
+        suggestion: "Keep glob imports within the current project root.",
+      },
+      err
+    );
+  }
 
   if (verbose) {
     console.error(`[imports] Glob pattern: ${resolvedPattern} (base: ${globBaseDir})`);
@@ -707,40 +929,88 @@ async function processGlobImport(
 
   const skippedBinaryFiles: string[] = [];
 
-  for await (const file of glob.scan({ cwd: currentFileDir, absolute: true, onlyFiles: true })) {
-    // Check gitignore - calculate relative path from the glob's base directory
-    // This ensures paths don't start with "../" which the ignore package can't handle
-    const relativePath = relative(globBaseDir, file);
-
-    // Skip paths that are still outside the glob base (shouldn't happen, but safety check)
-    if (relativePath.startsWith('..')) {
-      if (verbose) {
-        console.error(`[imports] Skipping file outside glob base: ${file}`);
+  try {
+    for await (const file of glob.scan({ cwd: currentFileDir, absolute: true, onlyFiles: true })) {
+      let safeFilePath: string;
+      try {
+        safeFilePath = sanitizePath(file, {
+          baseDir: currentFileDir,
+          projectRoot,
+        });
+      } catch (err) {
+        throw createImportError(
+          `Glob import "${pattern}" resolved a path outside project root.`,
+          "IMPORT_FILE_READ_FAILED",
+          {
+            pattern,
+            filePath: file,
+            projectRoot,
+            suggestion: "Adjust the glob pattern so it stays within project boundaries.",
+          },
+          err
+        );
       }
-      continue;
+
+      // Check gitignore - calculate relative path from the glob's base directory
+      // This ensures paths don't start with "../" which the ignore package can't handle
+      const relativePath = relative(globBaseDir, safeFilePath);
+
+      // Skip paths that are still outside the glob base (shouldn't happen, but safety check)
+      if (relativePath.startsWith('..')) {
+        if (verbose) {
+          console.error(`[imports] Skipping file outside glob base: ${file}`);
+        }
+        continue;
+      }
+
+      if (ig.ignores(relativePath)) {
+        continue;
+      }
+
+      // Check if file is binary (skip with warning in glob imports)
+      if (await isBinaryFileAsync(safeFilePath)) {
+        skippedBinaryFiles.push(relativePath);
+        continue;
+      }
+
+      const bunFile = Bun.file(safeFilePath);
+
+      // Check individual file size before reading
+      if (exceedsLimit(bunFile.size)) {
+        throw new FileSizeLimitError(file, bunFile.size);
+      }
+
+      try {
+        const content = await bunFile.text();
+        totalChars += content.length;
+        files.push({ path: relativePath, content });
+      } catch (err) {
+        throw createImportError(
+          `Failed to read file "${file}" while expanding glob "${pattern}".`,
+          "IMPORT_FILE_READ_FAILED",
+          {
+            filePath: safeFilePath,
+            pattern,
+            suggestion: "Check file permissions and encoding, then retry the import.",
+          },
+          err
+        );
+      }
     }
-
-    if (ig.ignores(relativePath)) {
-      continue;
+  } catch (err) {
+    if (err instanceof ImportError || err instanceof FileSizeLimitError) {
+      throw err;
     }
-
-    // Check if file is binary (skip with warning in glob imports)
-    if (await isBinaryFileAsync(file)) {
-      skippedBinaryFiles.push(relativePath);
-      continue;
-    }
-
-    const bunFile = Bun.file(file);
-
-    // Check individual file size before reading
-    if (exceedsLimit(bunFile.size)) {
-      throw new FileSizeLimitError(file, bunFile.size);
-    }
-
-    const content = await bunFile.text();
-    totalChars += content.length;
-
-    files.push({ path: relativePath, content });
+    throw createImportError(
+      `Failed to expand glob import "${pattern}" from "${currentFileDir}".`,
+      "IMPORT_FILE_READ_FAILED",
+      {
+        pattern,
+        currentFileDir,
+        suggestion: "Verify the glob path exists and that directories are readable.",
+      },
+      err
+    );
   }
 
   // Log warning about skipped binary files
@@ -780,10 +1050,16 @@ async function processGlobImport(
 
   // Error threshold - use dynamic context limit
   if (actualTokens > contextLimit && !process.env.MA_FORCE_CONTEXT) {
-    throw new Error(
+    throw createImportError(
       `Glob import "${pattern}" would include ~${actualTokens.toLocaleString()} tokens (${files.length} files), ` +
-        `which exceeds the ${contextLimit.toLocaleString()} token limit.\n` +
-        `To override this limit, set the MA_FORCE_CONTEXT=1 environment variable.`
+      `which exceeds the ${contextLimit.toLocaleString()} token limit.`,
+      "IMPORT_FILE_READ_FAILED",
+      {
+        pattern,
+        tokenCount: actualTokens,
+        contextLimit,
+        suggestion: "Narrow the glob, or set MA_FORCE_CONTEXT=1 to override intentionally.",
+      }
     );
   }
 
@@ -809,20 +1085,84 @@ async function processFileImport(
   importCtx?: ImportContext
 ): Promise<string> {
   const resolvedImports = importCtx?.resolvedImports;
+  const projectRoot = getProjectRoot(currentFileDir, importCtx);
+
+  const resolveSafeImportPath = (rawPath: string): string => {
+    try {
+      return resolveImportPath(rawPath, currentFileDir, projectRoot);
+    } catch (err) {
+      throw createImportError(
+        `Blocked import path "${rawPath}": ${getErrorMessage(err)}`,
+        "IMPORT_FILE_READ_FAILED",
+        {
+          importPath: rawPath,
+          projectRoot,
+          suggestion: "Keep imports within the project root or adjust invocation cwd.",
+        },
+        err
+      );
+    }
+  };
+
+  const ensureImportExists = async (resolvedPath: string, originalPath: string): Promise<ReturnType<typeof Bun.file>> => {
+    const file = Bun.file(resolvedPath);
+    let exists = false;
+    try {
+      exists = await file.exists();
+    } catch (err) {
+      throw createImportError(
+        `Failed to check imported path "${resolvedPath}".`,
+        "IMPORT_FILE_READ_FAILED",
+        {
+          importPath: originalPath,
+          resolvedPath,
+          suggestion: "Check file permissions and verify the path is accessible.",
+        },
+        err
+      );
+    }
+    if (!exists) {
+      throw createImportError(
+        `Import not found: ${originalPath} (resolved to ${resolvedPath})`,
+        "IMPORT_FILE_NOT_FOUND",
+        {
+          importPath: originalPath,
+          resolvedPath,
+          suggestion: "Confirm the file exists and that relative paths are correct.",
+        }
+      );
+    }
+    return file;
+  };
+
+  const readImportText = async (file: ReturnType<typeof Bun.file>, resolvedPath: string, originalPath: string): Promise<string> => {
+    try {
+      return await file.text();
+    } catch (err) {
+      throw createImportError(
+        `Failed to read imported file "${resolvedPath}".`,
+        "IMPORT_FILE_READ_FAILED",
+        {
+          importPath: originalPath,
+          resolvedPath,
+          suggestion: "Verify read permissions and that the file is valid UTF-8 text.",
+        },
+        err
+      );
+    }
+  };
+
   // Check for glob pattern first
   if (isGlobPatternInternal(importPath)) {
-    return processGlobImport(importPath, currentFileDir, verbose);
+    return processGlobImport(importPath, currentFileDir, projectRoot, verbose);
   }
 
   // Check for symbol extraction syntax
   const symbolParsed = parseSymbolExtractionInternal(importPath);
   if (symbolParsed.symbol) {
-    const resolvedPath = resolveImportPath(symbolParsed.path, currentFileDir);
+    const resolvedPath = resolveSafeImportPath(symbolParsed.path);
 
-    const file = Bun.file(resolvedPath);
-    if (!await file.exists()) {
-      throw new Error(`Import not found: ${symbolParsed.path} (resolved to ${resolvedPath})`);
-    }
+    const file = await ensureImportExists(resolvedPath, symbolParsed.path);
 
     // Check file size before reading
     if (exceedsLimit(file.size)) {
@@ -831,30 +1171,49 @@ async function processFileImport(
 
     // Check for binary file (throw error for direct imports)
     if (await isBinaryFileAsync(resolvedPath)) {
-      throw new Error(`Cannot import binary file: ${symbolParsed.path} (resolved to ${resolvedPath})`);
+      throw createImportError(
+        `Cannot import binary file: ${symbolParsed.path} (resolved to ${resolvedPath})`,
+        "IMPORT_BINARY_FILE",
+        {
+          importPath: symbolParsed.path,
+          resolvedPath,
+          suggestion: "Import a text file, or convert binary content to text before importing.",
+        }
+      );
     }
 
     if (verbose) {
       console.error(`[imports] Extracting symbol "${symbolParsed.symbol}" from: ${symbolParsed.path}`);
     }
 
-    const content = await file.text();
+    const content = await readImportText(file, resolvedPath, symbolParsed.path);
     // Track the resolved import
     if (resolvedImports) {
       resolvedImports.push(importPath);
     }
-    return extractSymbol(content, symbolParsed.symbol);
+    try {
+      return extractSymbol(content, symbolParsed.symbol);
+    } catch (err) {
+      throw createImportError(
+        `Failed to extract symbol "${symbolParsed.symbol}" from "${resolvedPath}": ${getErrorMessage(err)}`,
+        "IMPORT_FILE_READ_FAILED",
+        {
+          importPath: symbolParsed.path,
+          resolvedPath,
+          symbol: symbolParsed.symbol,
+          suggestion: "Verify the symbol name exists and is exported in the target file.",
+        },
+        err
+      );
+    }
   }
 
   // Check for line range syntax
   const rangeParsed = parseLineRangeInternal(importPath);
   if (rangeParsed.start !== undefined && rangeParsed.end !== undefined) {
-    const resolvedPath = resolveImportPath(rangeParsed.path, currentFileDir);
+    const resolvedPath = resolveSafeImportPath(rangeParsed.path);
 
-    const file = Bun.file(resolvedPath);
-    if (!await file.exists()) {
-      throw new Error(`Import not found: ${rangeParsed.path} (resolved to ${resolvedPath})`);
-    }
+    const file = await ensureImportExists(resolvedPath, rangeParsed.path);
 
     // Check file size before reading
     if (exceedsLimit(file.size)) {
@@ -863,14 +1222,22 @@ async function processFileImport(
 
     // Check for binary file (throw error for direct imports)
     if (await isBinaryFileAsync(resolvedPath)) {
-      throw new Error(`Cannot import binary file: ${rangeParsed.path} (resolved to ${resolvedPath})`);
+      throw createImportError(
+        `Cannot import binary file: ${rangeParsed.path} (resolved to ${resolvedPath})`,
+        "IMPORT_BINARY_FILE",
+        {
+          importPath: rangeParsed.path,
+          resolvedPath,
+          suggestion: "Import a text file instead of binary data.",
+        }
+      );
     }
 
     if (verbose) {
       console.error(`[imports] Loading lines ${rangeParsed.start}-${rangeParsed.end} from: ${rangeParsed.path}`);
     }
 
-    const content = await file.text();
+    const content = await readImportText(file, resolvedPath, rangeParsed.path);
     // Track the resolved import
     if (resolvedImports) {
       resolvedImports.push(importPath);
@@ -879,13 +1246,10 @@ async function processFileImport(
   }
 
   // Regular file import
-  const resolvedPath = resolveImportPath(importPath, currentFileDir);
+  const resolvedPath = resolveSafeImportPath(importPath);
 
   // Check if file exists first (needed for canonical path resolution)
-  const file = Bun.file(resolvedPath);
-  if (!await file.exists()) {
-    throw new Error(`Import not found: ${importPath} (resolved to ${resolvedPath})`);
-  }
+  const file = await ensureImportExists(resolvedPath, importPath);
 
   // Resolve to canonical path for cycle detection (handles symlinks)
   const canonicalPath = toCanonicalPath(resolvedPath);
@@ -893,7 +1257,16 @@ async function processFileImport(
   // Check for circular imports using canonical path
   if (stack.has(canonicalPath)) {
     const cycle = [...stack, canonicalPath].join(" -> ");
-    throw new Error(`Circular import detected: ${cycle}`);
+    throw createImportError(
+      `Circular import detected: ${cycle}`,
+      "IMPORT_CIRCULAR_DEPENDENCY",
+      {
+        importPath,
+        resolvedPath,
+        cycle,
+        suggestion: "Break the cycle by removing at least one import in the chain.",
+      }
+    );
   }
 
   // Check file size before reading
@@ -903,7 +1276,15 @@ async function processFileImport(
 
   // Check for binary file (throw error for direct imports)
   if (await isBinaryFileAsync(resolvedPath)) {
-    throw new Error(`Cannot import binary file: ${importPath} (resolved to ${resolvedPath})`);
+    throw createImportError(
+      `Cannot import binary file: ${importPath} (resolved to ${resolvedPath})`,
+      "IMPORT_BINARY_FILE",
+      {
+        importPath,
+        resolvedPath,
+        suggestion: "Import text/markdown/json files only.",
+      }
+    );
   }
 
   // Always log file loading to stderr for visibility
@@ -915,7 +1296,7 @@ async function processFileImport(
   }
 
   // Read file content
-  const content = await file.text();
+  const content = await readImportText(file, resolvedPath, importPath);
 
   // Recursively process imports in the imported file
   // Use canonical path in stack for consistent cycle detection
@@ -963,6 +1344,8 @@ async function processCommandInline(
   onProgress?: (chunk: string) => void,
   useDashboard: boolean = false
 ): Promise<string> {
+  const isWin = platform() === "win32";
+
   // Substitute template variables in command string if provided
   // This allows commands like !`echo {{ _name }}` to use frontmatter variables
   let processedCommand = command;
@@ -976,7 +1359,12 @@ async function processCommandInline(
   // Auto-prefix markdown files with `mdflow` to run them as agents
   let actualCommand = processedCommand;
   if (isMarkdownFileCommand(processedCommand)) {
-    actualCommand = `mdflow ${processedCommand}`;
+    const trimmed = processedCommand.trim();
+    const firstSpace = trimmed.search(/\s/);
+    const markdownPath = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+    const trailingArgs = firstSpace === -1 ? "" : trimmed.slice(firstSpace).trimStart();
+    const escapedMarkdownPath = escapeShellArg(markdownPath, isWin ? "win32" : "posix");
+    actualCommand = `mdflow ${escapedMarkdownPath}${trailingArgs ? ` ${trailingArgs}` : ""}`;
     console.error(`[imports] Auto-running .md file with mdflow: ${actualCommand}`);
   } else {
     // Always log command execution unless dashboard is active (it shows progress)
@@ -999,7 +1387,6 @@ async function processCommandInline(
   const commandCwd = importCtx?.invocationCwd ?? currentFileDir;
 
   // Improvement #5: Cross-platform shell support
-  const isWin = platform() === "win32";
   const shell = isWin ? "cmd.exe" : "sh";
   const shellArgs = isWin ? ["/d", "/s", "/c", actualCommand] : ["-c", actualCommand];
 
@@ -1052,7 +1439,16 @@ async function processCommandInline(
       setTimeout(() => {
         timedOut = true;
         proc?.kill();
-        reject(new Error(`Command timed out after ${commandTimeout}ms: ${actualCommand}`));
+        reject(createImportError(
+          `Inline command timed out after ${commandTimeout}ms: ${actualCommand}`,
+          "IMPORT_COMMAND_FAILED",
+          {
+            command: actualCommand,
+            timeoutMs: commandTimeout,
+            cwd: commandCwd,
+            suggestion: "Increase MDFLOW_COMMAND_TIMEOUT or optimize the command.",
+          }
+        ));
       }, commandTimeout);
     });
 
@@ -1076,7 +1472,15 @@ async function processCommandInline(
     // Improvement #9: Detect and block binary output (check first 1KB for null bytes)
     const checkChunk = new Uint8Array(stdoutBytes.slice(0, 1024));
     if (checkChunk.includes(0)) {
-      throw new Error(`Command returned binary data. Inline commands must return text: ${actualCommand}`);
+      throw createImportError(
+        `Inline command returned binary data and cannot be embedded as text: ${actualCommand}`,
+        "IMPORT_COMMAND_FAILED",
+        {
+          command: actualCommand,
+          cwd: commandCwd,
+          suggestion: "Modify the command to output plain text.",
+        }
+      );
     }
 
     // Decode to strings
@@ -1090,7 +1494,16 @@ async function processCommandInline(
     // Improvement #10: Detailed error reporting with stderr
     if (proc.exitCode !== 0) {
       const errorOutput = stderr || stdout || "No output";
-      throw new Error(`Command failed (Exit ${proc.exitCode}): ${actualCommand}\nOutput: ${errorOutput}`);
+      throw createImportError(
+        `Inline command failed (Exit ${proc.exitCode}): ${actualCommand}\nOutput: ${errorOutput}`,
+        "IMPORT_COMMAND_FAILED",
+        {
+          command: actualCommand,
+          exitCode: proc.exitCode,
+          cwd: commandCwd,
+          suggestion: "Run the command manually to debug and ensure it exits with code 0.",
+        }
+      );
     }
 
     // Combine stdout and stderr (stderr first if both exist)
@@ -1111,12 +1524,20 @@ async function processCommandInline(
     // Command output is processed after LiquidJS (Phase 3), so no template escaping needed
     return output;
   } catch (err) {
-    // Include more context in error messages
-    const errorMessage = (err as Error).message;
-    if (errorMessage.includes("timed out") || errorMessage.includes("Exit ")) {
-      throw err; // Re-throw timeout and exit code errors as-is
+    if (err instanceof ImportError) {
+      throw err;
     }
-    throw new Error(`Command failed: ${actualCommand} - ${errorMessage}`);
+    throw createImportError(
+      `Inline command failed: ${actualCommand} - ${getErrorMessage(err)}`,
+      "IMPORT_COMMAND_FAILED",
+      {
+        command: actualCommand,
+        cwd: commandCwd,
+        timedOut,
+        suggestion: "Verify shell command syntax and required tools in PATH.",
+      },
+      err
+    );
   }
 }
 
@@ -1142,8 +1563,21 @@ async function processExecutableCodeFence(
   const tmpFile = join(tmpdir(), `mdflow-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
 
   try {
-    await Bun.write(tmpFile, fullScript);
-    await chmod(tmpFile, 0o755);
+    try {
+      await Bun.write(tmpFile, fullScript);
+      await chmod(tmpFile, 0o755);
+    } catch (err) {
+      throw createImportError(
+        `Failed to prepare executable code fence temp file "${tmpFile}".`,
+        "IMPORT_FILE_READ_FAILED",
+        {
+          tmpFile,
+          language,
+          suggestion: "Verify temporary directory permissions and free disk space.",
+        },
+        err
+      );
+    }
 
     const proc = Bun.spawn([tmpFile], {
       cwd: importCtx?.invocationCwd ?? currentFileDir,
@@ -1152,19 +1586,73 @@ async function processExecutableCodeFence(
       env: (importCtx?.env ?? process.env) as Record<string, string>,
     });
 
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
+    let stdout = "";
+    let stderr = "";
+    try {
+      stdout = await new Response(proc.stdout).text();
+      stderr = await new Response(proc.stderr).text();
+    } catch (err) {
+      throw createImportError(
+        `Failed to capture executable code fence output for "${tmpFile}".`,
+        "IMPORT_COMMAND_FAILED",
+        {
+          tmpFile,
+          language,
+          suggestion: "Ensure the script writes text output and does not terminate abruptly.",
+        },
+        err
+      );
+    }
+
     await proc.exited;
 
     if (proc.exitCode !== 0) {
       const errorOutput = stderr || stdout || "No output";
-      throw new Error(`Code fence failed (Exit ${proc.exitCode}): ${errorOutput}`);
+      throw createImportError(
+        `Code fence failed (Exit ${proc.exitCode}): ${errorOutput}`,
+        "IMPORT_COMMAND_FAILED",
+        {
+          tmpFile,
+          language,
+          exitCode: proc.exitCode,
+          suggestion: "Run the script manually to debug the failure.",
+        }
+      );
     }
 
     // Command output is processed after LiquidJS (Phase 3), so no template escaping needed
     return (stdout + stderr).trim().replace(ANSI_ESCAPE_REGEX, '');
+  } catch (err) {
+    if (err instanceof ImportError) {
+      throw err;
+    }
+    throw createImportError(
+      `Executable code fence failed: ${getErrorMessage(err)}`,
+      "IMPORT_COMMAND_FAILED",
+      {
+        tmpFile,
+        language,
+        suggestion: "Validate the script interpreter and command dependencies.",
+      },
+      err
+    );
   } finally {
-    try { await unlink(tmpFile); } catch {}
+    try {
+      await unlink(tmpFile);
+    } catch (err) {
+      if (verbose) {
+        const cleanupErr = createImportError(
+          `Failed to clean up temp code fence file "${tmpFile}".`,
+          "IMPORT_FILE_READ_FAILED",
+          {
+            tmpFile,
+            suggestion: "Remove the temp file manually if it persists.",
+          },
+          err
+        );
+        console.error(`[imports] ${cleanupErr.message}`);
+      }
+    }
   }
 }
 
@@ -1345,7 +1833,7 @@ export async function expandImports(
             resolvedContent = await processFileImport(imp.path, currentFileDir, stack, verbose, importCtx);
             break;
           case 'url':
-            resolvedContent = await processUrlImport(imp.url, verbose);
+            resolvedContent = await processUrlImport(imp.url, verbose, importCtx);
             // Track URL imports
             if (resolvedImportsTracker) {
               resolvedImportsTracker.push(imp.url);
@@ -1484,7 +1972,7 @@ export async function expandContentImports(
         } else {
           // action.type === 'url'
           parsed = { type: 'url', full: action.original, url: action.url, index: action.index };
-          resolvedContent = await processUrlImport(action.url, verbose);
+          resolvedContent = await processUrlImport(action.url, verbose, ctx);
           if (tracker) tracker.push(action.url);
         }
 
