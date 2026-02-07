@@ -7,6 +7,10 @@ import { z } from "zod";
 
 /** Coerce any primitive value to string (for env vars where YAML may parse as bool/number) */
 const stringCoerce = z.union([z.string(), z.number(), z.boolean()]).transform(v => String(v));
+const formInputKeySchema = z
+  .string()
+  .regex(/^_.+/, "Input keys in _inputs object format must start with '_'")
+  .describe("Underscore-prefixed template variable key");
 
 // ============================================================================
 // Input Definition Schema (for form-style prompts)
@@ -16,43 +20,53 @@ const stringCoerce = z.union([z.string(), z.number(), z.boolean()]).transform(v 
  * Input definition schema for typed prompts
  * Validates input type and associated options
  */
-const inputDefinitionSchema = z.object({
-  type: z.enum(['text', 'select', 'number', 'confirm', 'password']),
+const inputDefinitionBaseSchema = z.object({
   description: z.string().optional(),
-  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
-  options: z.array(z.string()).optional(),
-  min: z.number().optional(),
-  max: z.number().optional(),
   required: z.boolean().optional(),
-}).refine(
-  (data) => {
-    // If type is 'select', options must be provided
-    if (data.type === 'select' && (!data.options || data.options.length === 0)) {
-      return false;
-    }
-    return true;
-  },
-  { message: "Select type requires 'options' array with at least one item" }
-).refine(
-  (data) => {
-    // If min/max provided, type should be 'number'
-    if ((data.min !== undefined || data.max !== undefined) && data.type !== 'number') {
-      return false;
-    }
-    return true;
-  },
-  { message: "'min' and 'max' are only valid for number type inputs" }
-);
+}).strict();
+
+const inputDefinitionSchema = z.discriminatedUnion("type", [
+  inputDefinitionBaseSchema.extend({
+    type: z.literal("text"),
+    default: z.string().optional(),
+  }),
+  inputDefinitionBaseSchema.extend({
+    type: z.literal("select"),
+    options: z.array(z.string()).min(1, "Select type requires 'options' array with at least one item"),
+    default: z.string().optional(),
+  }),
+  inputDefinitionBaseSchema.extend({
+    type: z.literal("number"),
+    default: z.number().optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+  }),
+  inputDefinitionBaseSchema.extend({
+    type: z.literal("confirm"),
+    default: z.boolean().optional(),
+  }),
+  inputDefinitionBaseSchema.extend({
+    type: z.literal("password"),
+    default: z.string().optional(),
+  }),
+]);
 
 /**
  * Form inputs schema - either legacy string array or new object format
  */
 const formInputsSchema = z.union([
   z.array(z.string()),
-  z.record(z.string(), inputDefinitionSchema),
+  z.record(formInputKeySchema, inputDefinitionSchema),
 ]);
 
 export type InputDefinitionSchema = z.infer<typeof inputDefinitionSchema>;
+
+/**
+ * Result of non-throwing schema parsing helpers.
+ */
+export type SafeParseResult<T> =
+  | { success: true; data: T }
+  | { success: false; errors: string[] };
 
 // ============================================================================
 // Config Schema (for ~/.mdflow/config.yaml and project configs)
@@ -95,7 +109,10 @@ export const globalConfigSchema = z.object({
 export type GlobalConfigSchema = z.infer<typeof globalConfigSchema>;
 
 /**
- * Validate config.yaml content
+ * Validate config.yaml content.
+ *
+ * @param data - Parsed config object from YAML/JSON.
+ * @returns Strongly typed config object when valid.
  * @throws Error with detailed message if validation fails
  */
 export function validateConfig(data: unknown): GlobalConfigSchema {
@@ -110,13 +127,12 @@ export function validateConfig(data: unknown): GlobalConfigSchema {
 }
 
 /**
- * Validate config without throwing - returns result object
+ * Validate config without throwing.
+ *
+ * @param data - Parsed config object from YAML/JSON.
+ * @returns Discriminated result containing either validated data or errors.
  */
-export function safeParseConfig(data: unknown): {
-  success: boolean;
-  data?: GlobalConfigSchema;
-  errors?: string[];
-} {
+export function safeParseConfig(data: unknown): SafeParseResult<GlobalConfigSchema> {
   const result = globalConfigSchema.safeParse(data);
 
   if (result.success) {
@@ -155,7 +171,10 @@ function formatZodIssues(issues: Array<{ path: PropertyKey[]; message: string }>
 }
 
 /**
- * Validate parsed YAML against frontmatter schema
+ * Validate parsed YAML against frontmatter schema.
+ *
+ * @param data - Parsed frontmatter object from YAML.
+ * @returns Strongly typed frontmatter object when valid.
  */
 export function validateFrontmatter(data: unknown): FrontmatterSchema {
   const result = frontmatterSchema.safeParse(data);
@@ -169,13 +188,12 @@ export function validateFrontmatter(data: unknown): FrontmatterSchema {
 }
 
 /**
- * Validate without throwing - returns result object
+ * Validate frontmatter without throwing.
+ *
+ * @param data - Parsed frontmatter object from YAML.
+ * @returns Discriminated result containing either validated data or errors.
  */
-export function safeParseFrontmatter(data: unknown): {
-  success: boolean;
-  data?: FrontmatterSchema;
-  errors?: string[];
-} {
+export function safeParseFrontmatter(data: unknown): SafeParseResult<FrontmatterSchema> {
   const result = frontmatterSchema.safeParse(data);
 
   if (result.success) {
