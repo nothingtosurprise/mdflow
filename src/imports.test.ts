@@ -3,6 +3,7 @@ import { expandImports, hasImports, toCanonicalPath, isMarkdownFileCommand } fro
 import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ImportError } from "./errors";
 
 let testDir: string;
 
@@ -66,6 +67,16 @@ test("expandImports handles subdirectory imports", async () => {
 test("expandImports throws on missing file", async () => {
   const content = "@./nonexistent.md";
   await expect(expandImports(content, testDir)).rejects.toThrow("Import not found");
+});
+
+test("expandImports throws typed ImportError for missing file", async () => {
+  try {
+    await expandImports("@./still-missing.md", testDir);
+    throw new Error("Expected expandImports to throw");
+  } catch (err) {
+    expect(err).toBeInstanceOf(ImportError);
+    expect((err as ImportError).errorCode).toBe("IMPORT_FILE_NOT_FOUND");
+  }
 });
 
 test("expandImports executes command inline", async () => {

@@ -1,6 +1,7 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe, spyOn, beforeEach, afterEach } from "bun:test";
 import { parseCommandFromFilename, resolveCommand, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, runCommand, type CaptureMode } from "./command";
 import type { AgentFrontmatter } from "./types";
+import { CommandError } from "./errors";
 
 describe("parseCommandFromFilename", () => {
   test("extracts command from filename pattern", () => {
@@ -33,6 +34,16 @@ describe("resolveCommand", () => {
 
   test("throws when no command can be resolved", () => {
     expect(() => resolveCommand("task.md")).toThrow("No command specified");
+  });
+
+  test("throws typed CommandError with code when missing command", () => {
+    try {
+      resolveCommand("task.md");
+      throw new Error("Expected resolveCommand to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CommandError);
+      expect((err as CommandError).errorCode).toBe("COMMAND_MISSING");
+    }
   });
 });
 
@@ -357,5 +368,34 @@ describe("runCommand capture modes", () => {
 
     expect(result.exitCode).toBe(42);
     expect(result.stdout.trim()).toBe("before exit");
+  });
+});
+
+describe("runCommand command suggestions", () => {
+  let consoleErrorSpy: ReturnType<typeof spyOn>;
+  let capturedErrors: string[] = [];
+
+  beforeEach(() => {
+    capturedErrors = [];
+    consoleErrorSpy = spyOn(console, "error").mockImplementation((msg: string) => {
+      capturedErrors.push(msg);
+    });
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  test("shows did-you-mean suggestion for close command typo", async () => {
+    const result = await runCommand({
+      command: "claud",
+      args: [],
+      positionals: [],
+      positionalMappings: new Map(),
+      captureOutput: false,
+    });
+
+    expect(result.exitCode).toBe(127);
+    expect(capturedErrors.some((line) => line.includes("Did you mean 'claude'?"))).toBe(true);
   });
 });
