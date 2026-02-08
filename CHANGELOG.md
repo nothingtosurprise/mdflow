@@ -1,3 +1,20 @@
+## [Unreleased]
+
+### Features
+
+* standardize typed error model with stable `errorCode` metadata and helper utilities ([b866d59](https://github.com/johnlindquist/mdflow/commit/b866d59))
+* enforce typed `_inputs` schemas and add non-throwing parse result unions for schema validation ([28dfcc1](https://github.com/johnlindquist/mdflow/commit/28dfcc1))
+
+### Bug Fixes
+
+* wire structured `MdflowError` handling through config loading and top-level CLI entrypoint ([5af774b](https://github.com/johnlindquist/mdflow/commit/5af774b))
+* harden local/URL import validation and tighten markerless fallback behavior ([06e0a1a](https://github.com/johnlindquist/mdflow/commit/06e0a1a), [fb0af00](https://github.com/johnlindquist/mdflow/commit/fb0af00))
+* dedupe shell argument escaping to reduce platform-specific quoting drift ([bbbc9d0](https://github.com/johnlindquist/mdflow/commit/bbbc9d0))
+
+### Tests
+
+* expand security, path, command escaping, and error metadata coverage for release hardening ([902ed97](https://github.com/johnlindquist/mdflow/commit/902ed97), [3e530f8](https://github.com/johnlindquist/mdflow/commit/3e530f8), [c4e3fe4](https://github.com/johnlindquist/mdflow/commit/c4e3fe4))
+
 ## [2.35.4](https://github.com/johnlindquist/mdflow/compare/v2.35.3...v2.35.4) (2025-12-19)
 
 

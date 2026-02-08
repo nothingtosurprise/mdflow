@@ -103,11 +103,17 @@ mdflow task.gemini.md
 mdflow task.md --_command claude
 mdflow task.md -_c gemini
 
+# One-shot ad-hoc mode (no file required)
+md.claude "Summarize: !`git diff --staged`"
+md.i.codex "Help me debug this test failure"
+
 # Pass additional flags to the command
 mdflow task.claude.md --verbose --debug
 ```
 
 > **Note:** Both `mdflow` and `md` commands are available.
+>
+> For the full command and frontmatter contract, see [`docs/public-api.md`](docs/public-api.md).
 
 ---
 
@@ -350,9 +356,18 @@ mdflow task.claude.md -_i             # Short form
 
 ---
 
-## Global Configuration
+## Configuration Layers
 
-Set default frontmatter per command in `~/.mdflow/config.yaml`:
+mdflow resolves configuration in this order (later entries override earlier ones):
+
+1. Built-in command defaults
+2. Global config (`~/.mdflow/config.yaml`)
+3. Project config at git root (`mdflow.config.yaml`, `.mdflow.yaml`, `.mdflow.json`)
+4. Project config at current working directory (`mdflow.config.yaml`, `.mdflow.yaml`, `.mdflow.json`)
+5. Agent frontmatter
+6. CLI passthrough flags
+
+Set global defaults per command in `~/.mdflow/config.yaml`:
 
 ```yaml
 commands:
@@ -362,7 +377,16 @@ commands:
     silent: true  # Always use --silent for copilot
 ```
 
-**Built-in defaults:** All commands default to print mode with appropriate flags per CLI tool.
+Set project defaults in your repository root:
+
+```yaml
+# mdflow.config.yaml
+commands:
+  claude:
+    model: opus
+```
+
+**Built-in defaults:** All commands default to print mode with tool-specific defaults.
 
 ---
 
@@ -558,6 +582,16 @@ Fetch content from URLs (markdown and JSON only):
 mdflow agent.claude.md --_no-cache
 ```
 
+**URL policy controls:** Restrict allowed URL imports with environment variables:
+
+```bash
+export MDFLOW_IMPORT_URL_ALLOWLIST="raw.githubusercontent.com,docs.example.com"
+export MDFLOW_IMPORT_URL_BLOCKLIST="*.internal.example.com"
+```
+
+Both variables accept comma-separated or newline-separated host rules.
+`MDFLOW_URL_ALLOWLIST` and `MDFLOW_URL_BLOCKLIST` are legacy aliases.
+
 ---
 
 ## Environment Variables
@@ -593,31 +627,60 @@ Environment variables are available:
 ```
 Usage: md <file.md> [flags for the command]
        md <command> [options]
+       md.COMMAND "prompt" [flags]      # Ad-hoc execution (no file needed)
 
 Commands:
-  md create [name]        Create a new agent file (opens in $EDITOR)
-  md explain <agent.md>   Show resolved config without executing
-  md setup                Configure shell (PATH, aliases)
-  md logs                 Show agent log directory
-  md help                 Show this help
+  md create [name] [flags]      Create a new agent file
+  md explain <agent.md>         Show resolved config without executing
+  md setup                      Configure shell (PATH, aliases)
+  md logs                       Show agent log directory
+  md help                       Show this help
+
+Ad-hoc execution (one-shot mode):
+  md.claude "What is 2+2?"                    # Quick prompt to Claude
+  md.gemini "Explain quantum computing"       # Quick prompt to Gemini
+  md.codex "Write a function"                 # Quick prompt to Codex
+  md.copilot "Help me debug"                  # Quick prompt to Copilot
+  md.droid "Build an app"                     # Quick prompt to Droid
+  md.opencode "Refactor this"                 # Quick prompt to OpenCode
+  md.i.claude "Start a chat"                  # Interactive mode
+  md.claude "Explain: @error.log" --model opus  # With @imports and flags
+
+Create options:
+  md create                     Interactive agent creator
+  md create task.claude.md      Create with name (auto-detects command)
+  md create -n task -p          Create in project .mdflow/ folder
+  md create -g --model gpt-4    Create globally with frontmatter
 
 Command resolution:
   1. --_command flag (e.g., md task.md --_command claude)
   2. Filename pattern (e.g., task.claude.md → claude)
 
+Agent file discovery (in priority order):
+  1. Explicit path:      md ./path/to/agent.md
+  2. Project agents:     ./.mdflow/
+  3. User agents:        ~/.mdflow/
+  4. $PATH directories
+  5. Current directory:  ./
+
 All frontmatter keys are passed as CLI flags to the command.
 Global defaults can be set in ~/.mdflow/config.yaml
 
+Remote execution:
+  md supports running agents from URLs (npx-style).
+  On first use, you'll be prompted to trust the domain.
+  Trusted domains are stored in ~/.mdflow/known_hosts
+
 md-specific flags (consumed, not passed to command):
-  --_command, -_c     Specify command to run
-  --_dry-run          Preview without executing
-  --_interactive, -_i Enable interactive mode
-  --_edit             Open resolved prompt in $EDITOR before execution
-  --_no-cache         Force fresh fetch for remote URLs (bypass cache)
-  --_trust            Bypass TOFU prompts for remote URLs
-  --_context          Show context tree and exit (no execution)
-  --_quiet            Skip context dashboard display before execution
-  --raw               Output raw markdown without rendering (for piping)
+  --_command, -_c   Specify command to run
+  --_dry-run        Show resolved command and prompt without executing
+  --_edit           Open resolved prompt in $EDITOR before execution
+  --_trust          Skip trust prompt for remote URLs (TOFU bypass)
+  --_no-cache       Force fresh fetch for remote URLs (bypass cache)
+  --raw             Output raw markdown without rendering (for piping)
+  --_context        Show context tree and exit (no execution)
+  --_quiet          Skip context dashboard display before execution
+  --_no-menu        Disable post-run action menu (for scripting/piping)
 
 Examples:
   md task.claude.md -p "print mode"
@@ -626,11 +689,11 @@ Examples:
   md task.md --_command claude
   md task.md -_c gemini
   md task.claude.md --_dry-run    # Preview without executing
-  md task.claude.md --_edit       # Edit prompt before running
-  md https://example.com/agent.claude.md  # Remote execution
+  md https://example.com/agent.claude.md            # Remote execution
+  md https://example.com/agent.claude.md --_trust   # Skip trust prompt
 
 Without arguments:
-  md              Interactive agent picker (frecency-sorted)
+  md              Interactive agent picker (from ./.mdflow/, ~/.mdflow/, etc.)
 ```
 
 ### Environment Variables
@@ -638,6 +701,13 @@ Without arguments:
 | Variable | Description |
 |----------|-------------|
 | `MDFLOW_FORCE_CONTEXT` | Set to `1` to disable the 100k token limit for glob imports |
+| `MDFLOW_IMPORT_URL_ALLOWLIST` | Comma/newline-separated allowlist rules for URL imports |
+| `MDFLOW_IMPORT_URL_BLOCKLIST` | Comma/newline-separated blocklist rules for URL imports |
+| `MDFLOW_URL_ALLOWLIST` | Legacy alias for `MDFLOW_IMPORT_URL_ALLOWLIST` |
+| `MDFLOW_URL_BLOCKLIST` | Legacy alias for `MDFLOW_IMPORT_URL_BLOCKLIST` |
+| `MDFLOW_FETCH_TIMEOUT` | HTTP fetch timeout in milliseconds (default: `10000`) |
+| `MDFLOW_COMMAND_TIMEOUT` | Inline command timeout in milliseconds (default: `30000`) |
+| `MDFLOW_AGENT_TIMEOUT` | Agent process timeout in milliseconds (default: `0` = disabled) |
 | `NODE_ENV` | Controls which `.env.[NODE_ENV]` file is loaded (default: `development`) |
 
 ---
@@ -756,6 +826,8 @@ This lets you review and tweak the final prompt (after template substitution and
 
 ## Notes
 
+- On typed failures, mdflow emits a stable error code prefix like `[CONFIG_FILE_PARSE_FAILED]`.
+- See [`docs/public-api.md#error-codes`](docs/public-api.md#error-codes) for the full error-code catalog.
 - If no frontmatter is present, the file is printed as-is (unless command inferred from filename)
 - Template system uses [LiquidJS](https://liquidjs.com/) - supports conditionals, loops, and filters
 - Logs are always written to `~/.mdflow/logs/<agent-name>/` for debugging
