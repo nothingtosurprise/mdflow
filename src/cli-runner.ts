@@ -52,6 +52,7 @@ import {
   MarkdownAgentError, EarlyExitRequest, UserCancelledError, FileNotFoundError,
   NetworkError, SecurityError, ConfigurationError, TemplateError, ImportError,
 } from "./errors";
+import { recordRun, type RunRecord } from "./telemetry";
 import type { SystemEnvironment } from "./system-environment";
 import { editPrompt } from "./edit-prompt";
 import { maskArgsArray } from "./secrets";
@@ -126,6 +127,23 @@ export interface CliRunResult {
   logPath?: string | null;
 }
 
+interface JsonModePayload {
+  exitCode: number;
+  command: string;
+  args: string[];
+  stdout: string;
+  stderr: string;
+  logPath: string;
+}
+
+interface JsonModeState {
+  command: string;
+  args: string[];
+  stdout: string;
+  stderr: string;
+  hasCommandResult: boolean;
+}
+
 /** Options for CliRunner */
 export interface CliRunnerOptions {
   env: SystemEnvironment;
@@ -149,6 +167,7 @@ export class CliRunner {
   private stdinContent: string | undefined;
   private promptInput: (message: string) => Promise<string>;
   private promptInputWithHistory: (message: string, defaultValue?: string) => Promise<string>;
+  private jsonModeState: JsonModeState | null = null;
 
   constructor(options: CliRunnerOptions) {
     this.env = options.env;
@@ -254,13 +273,212 @@ export class CliRunner {
     return { scope, positional };
   }
 
-  async run(argv: string[]): Promise<CliRunResult> {
-    let logPath: string | null = null;
-    try {
-      return await this.runInternal(argv, (lp) => { logPath = lp; });
-    } catch (err) {
-      return this.handleError(err, logPath);
+  private resetJsonModeState(): void {
+    this.jsonModeState = {
+      command: "",
+      args: [],
+      stdout: "",
+      stderr: "",
+      hasCommandResult: false,
+    };
+  }
+
+  private formatConsoleArgs(args: unknown[]): string {
+    return args.map((arg) => {
+      if (typeof arg === "string") return arg;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }).join(" ");
+  }
+
+  private buildSpawnArgs(
+    args: string[],
+    positionals: string[],
+    positionalMappings: Map<number, string>
+  ): string[] {
+    const finalArgs = [...args];
+    for (let i = 0; i < positionals.length; i++) {
+      const pos = i + 1;
+      const value = positionals[i];
+      if (value === undefined) continue;
+      if (positionalMappings.has(pos)) {
+        const flag = positionalMappings.get(pos)!;
+        finalArgs.push(flag.length === 1 ? `-${flag}` : `--${flag}`, value);
+      } else {
+        finalArgs.push(value);
+      }
     }
+    return finalArgs;
+  }
+
+  private recordJsonCommand(command: string, args: string[]): void {
+    if (!this.jsonModeState) return;
+    this.jsonModeState.command = command;
+    this.jsonModeState.args = [...args];
+  }
+
+  private recordJsonResult(stdout: string, stderr: string): void {
+    if (!this.jsonModeState) return;
+    this.jsonModeState.stdout = stdout;
+    this.jsonModeState.stderr = stderr;
+    this.jsonModeState.hasCommandResult = true;
+  }
+
+  private buildJsonModePayload(
+    result: CliRunResult,
+    logPath: string | null,
+    capturedStdout: string[],
+    capturedStderr: string[]
+  ): JsonModePayload {
+    const state = this.jsonModeState;
+    const joinedStdout = capturedStdout.join("\n");
+    const joinedStderr = capturedStderr.join("\n");
+    const hasCommandResult = state?.hasCommandResult ?? false;
+
+    const stdout = hasCommandResult ? (state?.stdout ?? "") : joinedStdout;
+
+    let stderr = hasCommandResult ? (state?.stderr ?? "") : joinedStderr;
+    if (hasCommandResult && joinedStderr.trim().length > 0) {
+      stderr = [stderr, joinedStderr].filter(Boolean).join("\n");
+    }
+    if (!stderr && result.errorMessage) stderr = result.errorMessage;
+
+    return {
+      exitCode: result.exitCode,
+      command: state?.command ?? "",
+      args: state?.args ?? [],
+      stdout,
+      stderr,
+      logPath: result.logPath ?? logPath ?? "",
+    };
+  }
+
+  private async executeCommand(
+    ctx: Parameters<typeof runCommand>[0],
+    jsonMode: boolean
+  ): Promise<Awaited<ReturnType<typeof runCommand>>> {
+    if (!jsonMode) return runCommand(ctx);
+
+    const spawnArgs = this.buildSpawnArgs(ctx.args, ctx.positionals, ctx.positionalMappings);
+    this.recordJsonCommand(ctx.command, spawnArgs);
+
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = () => {};
+    console.error = () => {};
+
+    try {
+      const result = await runCommand(ctx);
+      this.recordJsonResult(result.stdout, result.stderr);
+      return result;
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+  }
+
+  private calculateOutputBytes(stdout: string, stderr: string): number {
+    return Buffer.byteLength(stdout, "utf-8") + Buffer.byteLength(stderr, "utf-8");
+  }
+
+  private calculateWorkflowOutputBytes(workflowResult: WorkflowResult): number {
+    let totalOutputBytes = 0;
+    for (const stepId of workflowResult.stepOrder) {
+      const step = workflowResult.steps[stepId];
+      if (!step) continue;
+      totalOutputBytes += this.calculateOutputBytes(step.stdout, step.stderr);
+    }
+    return totalOutputBytes;
+  }
+
+  private async recordRunTelemetry(params: {
+    agentPath: string;
+    tool: string;
+    durationMs: number;
+    exitCode: number;
+    outputBytes: number;
+    currentState: "adhoc_command_completed" | "workflow_completed" | "command_completed";
+  }): Promise<void> {
+    const runRecord: RunRecord = {
+      agentPath: params.agentPath,
+      tool: params.tool,
+      durationMs: params.durationMs,
+      exitCode: params.exitCode,
+      outputBytes: params.outputBytes,
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      await recordRun(runRecord);
+      getCommandLogger().debug(
+        {
+          currentState: params.currentState,
+          agentPath: runRecord.agentPath,
+          tool: runRecord.tool,
+          durationMs: runRecord.durationMs,
+          exitCode: runRecord.exitCode,
+          outputBytes: runRecord.outputBytes,
+        },
+        "Run telemetry recorded"
+      );
+    } catch (err) {
+      const failureMessage = err instanceof Error ? err.message : String(err);
+      getCommandLogger().error(
+        {
+          attempted: "recordRun",
+          failed: failureMessage,
+          currentState: params.currentState,
+          runRecord,
+        },
+        "Run telemetry recording failed"
+      );
+    }
+  }
+
+  async run(argv: string[]): Promise<CliRunResult> {
+    const jsonMode = argv.includes("--json");
+    let logPath: string | null = null;
+    if (!jsonMode) {
+      try {
+        return await this.runInternal(argv, (lp) => { logPath = lp; });
+      } catch (err) {
+        return this.handleError(err, logPath);
+      }
+    }
+
+    this.resetJsonModeState();
+
+    const capturedStdout: string[] = [];
+    const capturedStderr: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+
+    console.log = (...args: unknown[]) => {
+      capturedStdout.push(this.formatConsoleArgs(args));
+    };
+    console.error = (...args: unknown[]) => {
+      capturedStderr.push(this.formatConsoleArgs(args));
+    };
+
+    let result: CliRunResult = { exitCode: 1 };
+    try {
+      try {
+        result = await this.runInternal(argv, (lp) => { logPath = lp; });
+      } catch (err) {
+        result = this.handleError(err, logPath);
+      }
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    const payload = this.buildJsonModePayload(result, logPath, capturedStdout, capturedStderr);
+    originalLog(JSON.stringify(payload));
+    this.jsonModeState = null;
+    return result;
   }
 
   private handleError(err: unknown, logPath: string | null): CliRunResult {
@@ -287,6 +505,7 @@ export class CliRunner {
 
     const cliArgs = parseCliArgs(argv);
     const subcommand = cliArgs.filePath;
+    const jsonModeRequested = cliArgs.passthroughArgs.includes("--json");
     const registryArgs = this.parseRegistryArgs(cliArgs.passthroughArgs);
 
     // Handle subcommands
@@ -376,6 +595,13 @@ export class CliRunner {
     let filePath = cliArgs.filePath;
     let passthroughArgs = cliArgs.passthroughArgs;
     if (!filePath || subcommand === "help") {
+      if (jsonModeRequested && !filePath && subcommand !== "help") {
+        this.writeStderr("Usage: md <file.md> [flags for command]");
+        this.writeStderr("       md <command> [options]");
+        this.writeStderr("\nCommands: create, setup, logs, explain, install, remove, list, help");
+        this.writeStderr("Run 'md help' for more info");
+        throw new ConfigurationError("No agent file specified", 1);
+      }
       const result = await handleMaCommands(cliArgs);
       if (result.selectedFile) {
         filePath = result.selectedFile;
@@ -470,7 +696,7 @@ export class CliRunner {
 
     // Edit before execute
     let promptToRun = finalBody;
-    if (parsed.editFlag) {
+    if (parsed.editFlag && !parsed.jsonMode) {
       const editResult = await editPrompt(finalBody);
       if (!editResult.confirmed || editResult.prompt === null) {
         logger.info({ editCancelled: true }, "Edit cancelled by user");
@@ -490,25 +716,41 @@ export class CliRunner {
     getCommandLogger().info({ command, argsCount: finalRunArgs.length, promptLength: promptToRun.length, adhoc: true }, "Executing ad-hoc command");
 
     // Start spinner with command preview
-    const preview = formatCommandPreview(command, finalRunArgs);
-    startSpinner(preview);
+    if (!parsed.jsonMode) {
+      const preview = formatCommandPreview(command, finalRunArgs);
+      startSpinner(preview);
+    }
 
     // Determine if we should capture output for post-run menu
     // Disable when piping (stdout not TTY) to support: foo.md | bar.md
-    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu;
+    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
     const structuredOutputConfig = this.getStructuredOutputConfig(frontmatter);
-    const captureMode = shouldShowMenu
-      ? "tee" as const
-      : (structuredOutputConfig ? "capture" as const : false);
+    const captureMode = parsed.jsonMode
+      ? "capture" as const
+      : shouldShowMenu
+        ? "tee" as const
+        : (structuredOutputConfig ? "capture" as const : false);
 
-    const runResult = await runCommand({
+    const commandStartedAt = Date.now();
+    const runResult = await this.executeCommand({
       command,
       args: finalRunArgs,
       positionals: [promptToRun],
       positionalMappings,
       captureOutput: captureMode,
+      captureStderr: parsed.jsonMode || shouldShowMenu,
       env: extractEnvVars(frontmatter),
       rawOutput: parsed.rawOutput,
+    }, parsed.jsonMode);
+    const commandDurationMs = Date.now() - commandStartedAt;
+
+    await this.recordRunTelemetry({
+      agentPath: virtualFilename,
+      tool: command,
+      durationMs: commandDurationMs,
+      exitCode: runResult.exitCode,
+      outputBytes: this.calculateOutputBytes(runResult.stdout, runResult.stderr),
+      currentState: "adhoc_command_completed",
     });
 
     getCommandLogger().info({ exitCode: runResult.exitCode, adhoc: true }, "Ad-hoc command completed");
@@ -651,13 +893,21 @@ export class CliRunner {
       }
 
       if (isRemote && !parsed.trustFlag) {
-        await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody);
+        await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody, parsed.jsonMode);
       }
 
-      const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu;
-      const captureMode = this.isStdoutTTY ? "tee" as const : "capture" as const;
+      const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
+      const captureMode = parsed.jsonMode
+        ? "capture" as const
+        : this.isStdoutTTY
+          ? "tee" as const
+          : "capture" as const;
       const cacheBaseDir = parsed.cwdFromCli ?? (frontmatter._cwd as string | undefined) ?? this.cwd;
+      if (parsed.jsonMode) {
+        this.recordJsonCommand(command, workflowRunArgs);
+      }
 
+      const workflowStartedAt = Date.now();
       const workflowResult = await executeWorkflow({
         workflow,
         defaultTool: command,
@@ -669,6 +919,17 @@ export class CliRunner {
         captureOutput: captureMode,
         resume: parsed.resume,
         cacheDir: join(cacheBaseDir, ".mdflow", ".cache"),
+        runCommandFn: (ctx) => this.executeCommand(ctx, parsed.jsonMode),
+      });
+      const workflowDurationMs = Date.now() - workflowStartedAt;
+
+      await this.recordRunTelemetry({
+        agentPath: localFilePath,
+        tool: command,
+        durationMs: workflowDurationMs,
+        exitCode: workflowResult.exitCode,
+        outputBytes: this.calculateWorkflowOutputBytes(workflowResult),
+        currentState: "workflow_completed",
       });
 
       if (workflowResult.exitCode === 0) {
@@ -721,7 +982,7 @@ export class CliRunner {
 
     // Edit before execute
     let promptToRun = finalBody;
-    if (parsed.editFlag) {
+    if (parsed.editFlag && !parsed.jsonMode) {
       const editResult = await editPrompt(finalBody);
       if (!editResult.confirmed || editResult.prompt === null) {
         if (isRemote) await cleanupRemote(localFilePath);
@@ -734,7 +995,7 @@ export class CliRunner {
 
     // TOFU check
     if (isRemote && !parsed.trustFlag) {
-      await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody);
+      await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody, parsed.jsonMode);
     }
 
     // Execute
@@ -747,35 +1008,40 @@ export class CliRunner {
     // Determine if we should capture output for post-run menu
     // Only capture when: TTY (stdin+stdout), not piped, menu not disabled
     // Checking stdout.isTTY enables piping: foo.md | bar.md
-    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu;
+    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
     const structuredOutputConfig = this.getStructuredOutputConfig(frontmatter);
     // Always capture stderr when in interactive mode for failure menu
-    const captureMode = shouldShowMenu
-      ? "tee" as const
-      : (structuredOutputConfig ? "capture" as const : false);
+    const captureMode = parsed.jsonMode
+      ? "capture" as const
+      : shouldShowMenu
+        ? "tee" as const
+        : (structuredOutputConfig ? "capture" as const : false);
 
     // Auto-heal retry loop
     let currentPrompt = promptToRun;
     let runResult: Awaited<ReturnType<typeof runCommand>>;
     let retryCount = 0;
 
+    const commandStartedAt = Date.now();
     while (true) {
       getCommandLogger().info({ command, argsCount: finalRunArgs.length, promptLength: currentPrompt.length, retryCount }, "Executing command");
 
       // Start spinner with command preview (will be stopped when first output arrives)
-      const preview = formatCommandPreview(command, finalRunArgs);
-      startSpinner(preview);
+      if (!parsed.jsonMode) {
+        const preview = formatCommandPreview(command, finalRunArgs);
+        startSpinner(preview);
+      }
 
-      runResult = await runCommand({
+      runResult = await this.executeCommand({
         command,
         args: finalRunArgs,
         positionals: [currentPrompt],
         positionalMappings,
         captureOutput: captureMode,
-        captureStderr: shouldShowMenu, // Capture stderr for failure menu
+        captureStderr: shouldShowMenu || parsed.jsonMode, // Capture stderr for failure menu/json output
         env: extractEnvVars(frontmatter),
         rawOutput: parsed.rawOutput,
-      });
+      }, parsed.jsonMode);
 
       getCommandLogger().info({ exitCode: runResult.exitCode, retryCount }, "Command completed");
 
@@ -818,6 +1084,16 @@ export class CliRunner {
         break;
       }
     }
+    const commandDurationMs = Date.now() - commandStartedAt;
+
+    await this.recordRunTelemetry({
+      agentPath: localFilePath,
+      tool: command,
+      durationMs: commandDurationMs,
+      exitCode: runResult.exitCode,
+      outputBytes: this.calculateOutputBytes(runResult.stdout, runResult.stderr),
+      currentState: "command_completed",
+    });
 
     // Record usage for frecency tracking (skip for failed runs, lazy-load history)
     if (runResult.exitCode === 0) {
@@ -1014,6 +1290,7 @@ export class CliRunner {
     let commandFromCli: string | undefined;
     let dryRun = false, trustFlag = false, interactiveFromCli = false, noCache = false, rawOutput = false, editFlag = false;
     let contextOnly = false, quiet = false, noMenu = false, noHistory = false, resume = false;
+    let jsonMode = false;
     let cwdFromCli: string | undefined;
 
     const cmdIdx = remainingArgs.findIndex((a) => a === "--_command" || a === "-_c");
@@ -1036,6 +1313,8 @@ export class CliRunner {
     if (noCacheIdx !== -1) { noCache = true; remainingArgs.splice(noCacheIdx, 1); }
     const noMenuIdx = remainingArgs.indexOf("--_no-menu");
     if (noMenuIdx !== -1) { noMenu = true; remainingArgs.splice(noMenuIdx, 1); }
+    const jsonIdx = remainingArgs.indexOf("--json");
+    if (jsonIdx !== -1) { jsonMode = true; remainingArgs.splice(jsonIdx, 1); }
     // --_no-history flag: skip loading/saving variable history
     const noHistoryIdx = remainingArgs.indexOf("--_no-history");
     if (noHistoryIdx !== -1) { noHistory = true; remainingArgs.splice(noHistoryIdx, 1); }
@@ -1057,7 +1336,7 @@ export class CliRunner {
     const quietIdx = remainingArgs.indexOf("--_quiet");
     if (quietIdx !== -1) { quiet = true; remainingArgs.splice(quietIdx, 1); }
 
-    return { remainingArgs, commandFromCli, dryRun, editFlag, trustFlag, interactiveFromCli, cwdFromCli, noCache, rawOutput, contextOnly, quiet, noMenu, noHistory, resume };
+    return { remainingArgs, commandFromCli, dryRun, editFlag, trustFlag, interactiveFromCli, cwdFromCli, noCache, rawOutput, contextOnly, quiet, noMenu, noHistory, resume, jsonMode };
   }
 
   private async processAgent(
@@ -1067,7 +1346,7 @@ export class CliRunner {
     stdinContent: string,
     parsed: ReturnType<typeof this.parseFlags>
   ) {
-    const { remainingArgs, commandFromCli, interactiveFromCli, cwdFromCli, noHistory } = parsed;
+    const { remainingArgs, commandFromCli, interactiveFromCli, cwdFromCli, noHistory, jsonMode } = parsed;
     let remaining = [...remainingArgs];
 
     // Resolve command
@@ -1212,7 +1491,7 @@ export class CliRunner {
       }
 
       // In interactive mode, collect missing form inputs via prompts
-      if (this.isStdinTTY) {
+      if (this.isStdinTTY && !jsonMode) {
         const collected = await collectFormInputs(formInputs, templateVars);
         Object.assign(templateVars, collected);
       } else {
@@ -1241,7 +1520,7 @@ export class CliRunner {
     const promptedVars: Record<string, string> = {};
 
     if (missingVars.length > 0) {
-      if (this.isStdinTTY) {
+      if (this.isStdinTTY && !jsonMode) {
         this.writeStderr("Missing required variables. Please provide values:");
         for (const v of missingVars) {
           const previousValue = variableHistory[v];
@@ -1369,13 +1648,13 @@ export class CliRunner {
 
   private async handleTOFU(
     filePath: string, localFilePath: string, command: string,
-    baseFrontmatter: Record<string, unknown>, rawBody: string
+    baseFrontmatter: Record<string, unknown>, rawBody: string, jsonMode: boolean
   ): Promise<void> {
     const domain = extractDomain(filePath);
     const trusted = await isDomainTrusted(filePath);
 
     if (!trusted) {
-      if (!this.isStdinTTY) {
+      if (!this.isStdinTTY || jsonMode) {
         await cleanupRemote(localFilePath);
         throw new SecurityError(`Untrusted remote domain: ${domain}. Use --_trust flag to bypass this check in non-interactive mode, or run interactively to add the domain to known_hosts.`);
       }

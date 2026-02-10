@@ -33,7 +33,9 @@ export type ReservedFrontmatterSystemKey =
   | "_c"
   | "_steps"
   | "_workflow"
-  | "_context_budget_tokens";
+  | "_context_budget_tokens"
+  | "_max_prompt_tokens"
+  | "_max_runtime_ms";
 
 export type FrontmatterSystemKey = ReservedFrontmatterSystemKey | `_${string}`;
 
@@ -181,6 +183,18 @@ export interface AgentFrontmatter {
   _context_budget_tokens?: number;
 
   /**
+   * Maximum allowed prompt token estimate before execution.
+   * If estimated prompt tokens exceed this limit, execution is blocked.
+   */
+  _max_prompt_tokens?: number;
+
+  /**
+   * Maximum allowed runtime in milliseconds.
+   * Used for telemetry budget enforcement checks.
+   */
+  _max_runtime_ms?: number;
+
+  /**
    * Context window limit override (in tokens)
    * If set, overrides the model-based default context limit
    * Useful for custom models or when you want to enforce a specific limit
@@ -200,7 +214,8 @@ export interface AgentFrontmatter {
    * Underscore-prefixed keys are template variables, not passed to CLI.
    * Available in body as {{ _varname }}, can be overridden via --_varname CLI flag.
    * Example: _name: "default" → {{ _name }} in body → --_name "override"
-   * Note: Also includes system keys like _inputs, _env, _output, _steps, and _context_budget_tokens.
+   * Note: Also includes system keys like _inputs, _env, _output, _steps,
+   * _context_budget_tokens, _max_prompt_tokens, and _max_runtime_ms.
    */
   [key: FrontmatterSystemKey]: FrontmatterValue;
 
