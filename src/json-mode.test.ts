@@ -9,14 +9,14 @@ function captureStreams() {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout);
   const originalStderrWrite = process.stderr.write.bind(process.stderr);
 
-  process.stdout.write = ((chunk: unknown, ...args: unknown[]) => {
+  process.stdout.write = ((chunk: unknown) => {
     stdout.push(typeof chunk === "string" ? chunk : String(chunk));
-    return typeof args[0] === "function" ? (args[0] as () => void)() || true : true;
+    return true;
   }) as typeof process.stdout.write;
 
-  process.stderr.write = ((chunk: unknown, ...args: unknown[]) => {
+  process.stderr.write = ((chunk: unknown) => {
     stderr.push(typeof chunk === "string" ? chunk : String(chunk));
-    return typeof args[0] === "function" ? (args[0] as () => void)() || true : true;
+    return true;
   }) as typeof process.stderr.write;
 
   return {
