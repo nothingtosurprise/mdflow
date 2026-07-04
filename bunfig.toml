@@ -1,0 +1,5 @@
+# Scope bun test discovery to src/ — spike/ holds throwaway experiments whose
+# deps are deliberately not installed, and smoke-tests/ are runnable .md flows,
+# not bun tests.
+[test]
+root = "src"
