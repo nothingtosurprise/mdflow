@@ -587,6 +587,10 @@ export class CliRunner {
       await runExplain(cliArgs.passthroughArgs);
       return { exitCode: 0 };
     }
+    if (subcommand === "eval") {
+      const { runEvalCli } = await import("./evals");
+      return { exitCode: await runEvalCli(cliArgs.passthroughArgs) };
+    }
     if (subcommand === "help") cliArgs.help = true;
 
     let filePath = cliArgs.filePath;
@@ -595,7 +599,7 @@ export class CliRunner {
       if (jsonModeRequested && !filePath && subcommand !== "help") {
         this.writeStderr("Usage: md <file.md> [flags for command]");
         this.writeStderr("       md <command> [options]");
-        this.writeStderr("\nCommands: create, setup, logs, explain, install, remove, list, help");
+        this.writeStderr("\nCommands: create, setup, logs, explain, eval, install, remove, list, help");
         this.writeStderr("Run 'md help' for more info");
         throw new ConfigurationError("No agent file specified", 1);
       }
@@ -609,7 +613,7 @@ export class CliRunner {
       } else if (!result.handled) {
         this.writeStderr("Usage: md <file.md> [flags for command]");
         this.writeStderr("       md <command> [options]");
-        this.writeStderr("\nCommands: create, setup, logs, explain, install, remove, list, help");
+        this.writeStderr("\nCommands: create, setup, logs, explain, eval, install, remove, list, help");
         this.writeStderr("Run 'md help' for more info");
         throw new ConfigurationError("No agent file specified", 1);
       }
