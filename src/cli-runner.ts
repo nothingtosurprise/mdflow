@@ -696,6 +696,20 @@ export class CliRunner {
     }
 
     // Edit before execute
+    // Hard prompt budget: _max_prompt_tokens blocks execution BEFORE any
+    // engine turn is spent when the fully resolved prompt exceeds the limit.
+    const maxPromptTokens = frontmatter._max_prompt_tokens;
+    if (typeof maxPromptTokens === "number" && maxPromptTokens > 0) {
+      const promptTokens = await countTokensAsync(finalBody);
+      if (promptTokens > maxPromptTokens) {
+        throw new MarkdownAgentError(
+          `Prompt is ~${promptTokens.toLocaleString()} tokens, over the _max_prompt_tokens limit of ${maxPromptTokens.toLocaleString()}. ` +
+            `Narrow the imports, raise the limit, or inspect with --_context.`,
+          { errorCode: "PROMPT_TOKEN_LIMIT", exitCode: 1 }
+        );
+      }
+    }
+
     let promptToRun = finalBody;
     if (parsed.editFlag && !parsed.jsonMode) {
       const editResult = await editPrompt(finalBody);
@@ -982,6 +996,20 @@ export class CliRunner {
     }
 
     // Edit before execute
+    // Hard prompt budget: _max_prompt_tokens blocks execution BEFORE any
+    // engine turn is spent when the fully resolved prompt exceeds the limit.
+    const maxPromptTokens = frontmatter._max_prompt_tokens;
+    if (typeof maxPromptTokens === "number" && maxPromptTokens > 0) {
+      const promptTokens = await countTokensAsync(finalBody);
+      if (promptTokens > maxPromptTokens) {
+        throw new MarkdownAgentError(
+          `Prompt is ~${promptTokens.toLocaleString()} tokens, over the _max_prompt_tokens limit of ${maxPromptTokens.toLocaleString()}. ` +
+            `Narrow the imports, raise the limit, or inspect with --_context.`,
+          { errorCode: "PROMPT_TOKEN_LIMIT", exitCode: 1 }
+        );
+      }
+    }
+
     let promptToRun = finalBody;
     if (parsed.editFlag && !parsed.jsonMode) {
       const editResult = await editPrompt(finalBody);
