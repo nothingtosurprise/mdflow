@@ -205,9 +205,12 @@ describe("SUPPORTED_COMMANDS", () => {
     expect(SUPPORTED_COMMANDS).toContain("copilot");
     expect(SUPPORTED_COMMANDS).toContain("droid");
     expect(SUPPORTED_COMMANDS).toContain("opencode");
+    expect(SUPPORTED_COMMANDS).toContain("pi");
+    expect(SUPPORTED_COMMANDS).toContain("cursor-agent");
+    expect(SUPPORTED_COMMANDS).toContain("agy");
   });
 
-  it("has exactly 6 supported commands", () => {
-    expect(SUPPORTED_COMMANDS.length).toBe(6);
+  it("has exactly 9 built-in commands (registry/PATH engines extend beyond)", () => {
+    expect(SUPPORTED_COMMANDS.length).toBe(9);
   });
 });
