@@ -1,143 +1,112 @@
-/**
- * Typed error classes for mdflow
- *
- * These errors allow library code to signal failures without calling process.exit(),
- * enabling proper error handling in tests and when used as a library.
- *
- * Only the main entry point (index.ts) should catch these and set exit codes.
- */
+export type ErrorContext = Record<string, unknown>;
 
-/**
- * Base error class for all mdflow errors
- */
-export class MarkdownAgentError extends Error {
-  constructor(message: string, public code: number = 1) {
+export type MdflowErrorCode =
+  | "MDFLOW_UNKNOWN"
+  | "CONFIG_FILE_READ_FAILED"
+  | "CONFIG_FILE_PARSE_FAILED"
+  | "CONFIG_FILE_VALIDATION_FAILED"
+  | "CONFIG_FILE_DISCOVERY_FAILED"
+  | "ENV_FILE_READ_FAILED"
+  | "IMPORT_FILE_NOT_FOUND"
+  | "IMPORT_FILE_READ_FAILED"
+  | "IMPORT_BINARY_FILE"
+  | "IMPORT_CIRCULAR_DEPENDENCY"
+  | "IMPORT_COMMAND_FAILED"
+  | "IMPORT_URL_FETCH_FAILED"
+  | "COMMAND_MISSING"
+  | "COMMAND_INVALID"
+  | "COMMAND_NOT_FOUND"
+  | "COMMAND_EXECUTION_FAILED"
+  | "TEMPLATE_MISSING_VARIABLE"
+  | "TEMPLATE_PROCESSING_FAILED"
+  | "SECURITY_TRUST_FAILED"
+  | "INPUT_LIMIT_EXCEEDED"
+  | "NETWORK_REQUEST_FAILED"
+  | "HOOK_EXECUTION_FAILED"
+  | "VALIDATION_FAILED"
+  | "USER_CANCELLED"
+  | "EARLY_EXIT";
+
+export interface MdflowErrorOptions {
+  exitCode?: number;
+  errorCode?: MdflowErrorCode;
+  context?: ErrorContext;
+  cause?: unknown;
+}
+
+export type MarkdownAgentErrorOptions = MdflowErrorOptions;
+type ErrorInput = MdflowErrorOptions | number;
+
+function withDefaults(optionsOrCode: ErrorInput, errorCode: MdflowErrorCode, exitCode = 1): MdflowErrorOptions {
+  if (typeof optionsOrCode === "number") return { exitCode: optionsOrCode, errorCode, context: {} };
+  return {
+    exitCode: optionsOrCode.exitCode ?? exitCode,
+    errorCode: optionsOrCode.errorCode ?? errorCode,
+    context: optionsOrCode.context ?? {},
+    cause: optionsOrCode.cause,
+  };
+}
+
+export class MdflowError extends Error {
+  public readonly code: number;
+  public readonly errorCode: MdflowErrorCode;
+  public readonly context: ErrorContext;
+
+  constructor(message: string, optionsOrCode: ErrorInput = {}) {
+    const options = withDefaults(optionsOrCode, "MDFLOW_UNKNOWN");
     super(message);
-    this.name = "MarkdownAgentError";
-    // Maintains proper stack trace for where error was thrown (only in V8)
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
+    this.name = new.target.name;
+    this.code = options.exitCode ?? 1;
+    this.errorCode = options.errorCode ?? "MDFLOW_UNKNOWN";
+    this.context = options.context ?? {};
+    if (options.cause !== undefined) (this as Error & { cause?: unknown }).cause = options.cause;
+    Error.captureStackTrace?.(this, this.constructor);
   }
 }
 
-/**
- * Configuration-related errors (invalid config, missing required fields, etc.)
- */
-export class ConfigurationError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "ConfigurationError";
-  }
-}
+export class MarkdownAgentError extends MdflowError {}
 
-/**
- * Security-related errors (untrusted domains, trust verification failures)
- */
-export class SecurityError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "SecurityError";
-  }
+export class ConfigError extends MarkdownAgentError {
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "CONFIG_FILE_READ_FAILED")); }
 }
-
-/**
- * Input limit exceeded errors (stdin too large, file too large)
- */
-export class InputLimitError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "InputLimitError";
-  }
-}
-
-/**
- * File not found or inaccessible errors
- */
-export class FileNotFoundError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "FileNotFoundError";
-  }
-}
-
-/**
- * Network-related errors (failed fetches, connection issues)
- */
-export class NetworkError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "NetworkError";
-  }
-}
-
-/**
- * Command execution errors (command not found, failed to spawn)
- */
-export class CommandError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "CommandError";
-  }
-}
-
-/**
- * Command resolution errors (can't determine which command to run)
- */
-export class CommandResolutionError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "CommandResolutionError";
-  }
-}
-
-/**
- * Import expansion errors (failed to expand @file imports)
- */
 export class ImportError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "ImportError";
-  }
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "IMPORT_FILE_READ_FAILED")); }
 }
-
-/**
- * Template processing errors (missing variables, syntax errors)
- */
+export class CommandError extends MarkdownAgentError {
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "COMMAND_EXECUTION_FAILED")); }
+}
 export class TemplateError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "TemplateError";
-  }
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "TEMPLATE_PROCESSING_FAILED")); }
+}
+export class ValidationError extends MarkdownAgentError {
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "VALIDATION_FAILED")); }
 }
 
-/**
- * Hook execution errors (pre/post hook failures)
- */
+export class ConfigurationError extends ConfigError {}
+export class CommandResolutionError extends CommandError {}
+
+export class SecurityError extends MarkdownAgentError {
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "SECURITY_TRUST_FAILED")); }
+}
+export class InputLimitError extends MarkdownAgentError {
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "INPUT_LIMIT_EXCEEDED")); }
+}
+export class FileNotFoundError extends MarkdownAgentError {
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "IMPORT_FILE_NOT_FOUND")); }
+}
+export class NetworkError extends MarkdownAgentError {
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "NETWORK_REQUEST_FAILED")); }
+}
 export class HookError extends MarkdownAgentError {
-  constructor(message: string, code: number = 1) {
-    super(message, code);
-    this.name = "HookError";
-  }
+  constructor(message: string, optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "HOOK_EXECUTION_FAILED")); }
 }
-
-/**
- * User cancelled the operation (e.g., declined trust prompt)
- */
 export class UserCancelledError extends MarkdownAgentError {
-  constructor(message: string = "Operation cancelled by user", code: number = 1) {
-    super(message, code);
-    this.name = "UserCancelledError";
-  }
+  constructor(message = "Operation cancelled by user", optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "USER_CANCELLED")); }
+}
+export class EarlyExitRequest extends MarkdownAgentError {
+  constructor(message = "", optionsOrCode: ErrorInput = {}) { super(message, withDefaults(optionsOrCode, "EARLY_EXIT", 0)); }
 }
 
-/**
- * Early exit request (for --help, --logs, etc. that need clean exit)
- * These are not errors per se, but signal that execution should stop with code 0
- */
-export class EarlyExitRequest extends MarkdownAgentError {
-  constructor(message: string = "", code: number = 0) {
-    super(message, code);
-    this.name = "EarlyExitRequest";
-  }
+export function getErrorMessage(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : String(err);
 }

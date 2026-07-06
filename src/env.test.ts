@@ -1,8 +1,9 @@
 import { test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import { loadEnvFiles, getEnvFilesInDirectory } from "./env";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ConfigError } from "./errors";
 
 let testDir: string;
 let originalEnv: Record<string, string | undefined>;
@@ -113,4 +114,15 @@ test("loadEnvFiles returns 0 for directory with no env files", async () => {
   expect(count).toBe(0);
 
   await rm(emptyDir, { recursive: true });
+});
+
+test("loadEnvFiles throws ConfigError when env path is unreadable as file", async () => {
+  const envDirPath = join(testDir, ".env");
+  await Bun.write(envDirPath, "LOCKED_VAR=value");
+  await chmod(envDirPath, 0o000);
+
+  await expect(loadEnvFiles(testDir)).rejects.toBeInstanceOf(ConfigError);
+
+  await chmod(envDirPath, 0o644);
+  await rm(envDirPath, { recursive: true, force: true });
 });

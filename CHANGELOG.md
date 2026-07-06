@@ -1,3 +1,79 @@
+# [3.0.0-next.2](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.1...v3.0.0-next.2) (2026-07-05)
+
+
+### Features
+
+* **eval,engine:** repo-bound eval cases; description/route are reserved keys ([6bff9af](https://github.com/johnlindquist/mdflow/commit/6bff9af16ac54b70880d4d35efb1e09f847e872e))
+
+# [3.0.0-next.1](https://github.com/johnlindquist/mdflow/compare/v2.35.4...v3.0.0-next.1) (2026-07-05)
+
+
+* docs(v3)!: terminology sweep + v3 docs; retire MA_COMMAND references ([fcaf4c2](https://github.com/johnlindquist/mdflow/commit/fcaf4c2983288b9071c5d79a251bdd0c0774627b))
+* feat(engine)!: resolution ladder with a default engine; engine: replaces tool: ([0889b9f](https://github.com/johnlindquist/mdflow/commit/0889b9f5ec250e253130bb27b8f430f6cdf22168))
+
+
+### Bug Fixes
+
+* **command:** dedupe shell arg escaping ([bbbc9d0](https://github.com/johnlindquist/mdflow/commit/bbbc9d0213c6109025b6ba2f365a074d862bf5ec))
+* **core:** wire MdflowError handling in config and entrypoint ([5af774b](https://github.com/johnlindquist/mdflow/commit/5af774b881fc7d67c1bb0405c5f10f30f1faeb90))
+* **imports:** constrain markerless root fallback ([fb0af00](https://github.com/johnlindquist/mdflow/commit/fb0af000bd18bc0f60ed8b83f2f6025a053f17d9))
+* **imports:** harden path and URL import validation ([06e0a1a](https://github.com/johnlindquist/mdflow/commit/06e0a1a2a25ae062bfedd418e818027faaabc8e7))
+* stop spinner before streaming output to prevent double-rendering ([48af0af](https://github.com/johnlindquist/mdflow/commit/48af0af6fdcb3b7d0d8206670678316fad8d7be0))
+* **tests:** restore green baseline before v3 work ([9ab4620](https://github.com/johnlindquist/mdflow/commit/9ab4620a5fc26f0e17f721d305e0373aac8b7175)), closes [#13](https://github.com/johnlindquist/mdflow/issues/13)
+
+
+### Features
+
+* **adapters:** add portable agent spec with provider-agnostic frontmatter translation ([0497bd1](https://github.com/johnlindquist/mdflow/commit/0497bd130f7479407511b9fce26a22583fd845e0))
+* **adapters:** pi (hermetic default engine), cursor-agent, and agy (Antigravity) ([d421ae8](https://github.com/johnlindquist/mdflow/commit/d421ae8d827b63c0845fbcefe80b5c62f0e2c702))
+* **cli:** add --json output mode for scripting and CI integration ([cb0b4a7](https://github.com/johnlindquist/mdflow/commit/cb0b4a7e8f5811774bc10592813a8a3f5fbbb609))
+* **context:** add context provider registry with git, tree, and rg providers ([f7b4671](https://github.com/johnlindquist/mdflow/commit/f7b4671d37deeb6353ad7459a32be886b5d34091))
+* **context:** wire context providers into import parser and expansion ([f598322](https://github.com/johnlindquist/mdflow/commit/f598322b570a085a72b6cffa96e23320e11a7de1))
+* **engine:** filename rung only claims runnable engines; eval --filter guardrail ([b7a245f](https://github.com/johnlindquist/mdflow/commit/b7a245fd3314d8c531aafbcca51fb692bf0982eb))
+* **errors:** add MdflowError base and ValidationError ([b866d59](https://github.com/johnlindquist/mdflow/commit/b866d5971555d264b29c01bb82726c2a1e51eb83))
+* **eval:** md eval — behavioral eval suites for flows with a trust ledger ([ebb5082](https://github.com/johnlindquist/mdflow/commit/ebb5082d80817e2563f01163018f3bc2d2bb795f))
+* **output:** add structured output extraction, validation, and sink module ([53dd2ff](https://github.com/johnlindquist/mdflow/commit/53dd2ff6ac4bf23dac072d68b3818e1b7ab4a11e))
+* **output:** wire structured output processing into CLI runner and post-run menu ([a250771](https://github.com/johnlindquist/mdflow/commit/a250771c829d894f442c2c4c03e6e61c2afaccbb))
+* **pi:** Codex-subscription auth bridge + adapter prepareEnv hook ([07668c4](https://github.com/johnlindquist/mdflow/commit/07668c4a637677909090db8abcffb9b06cc1afa9))
+* **registry:** add agent registry with install/remove/list and lockfile integrity ([b54807d](https://github.com/johnlindquist/mdflow/commit/b54807d393b1cb5d76c392a7e6fdaa803f2dfd2f))
+* **schema:** enforce typed _inputs and parse result unions ([28dfcc1](https://github.com/johnlindquist/mdflow/commit/28dfcc1fbaee00ea20537ac0a8122ea9e10898c6))
+* **skill:** installable agent skill — npx skills add johnlindquist/mdflow ([ad2b0e8](https://github.com/johnlindquist/mdflow/commit/ad2b0e833eac752ba610f3c380d5ad7e4d814bbc))
+* **spike:** add Bun p-queue compatibility PoC ([b3887cd](https://github.com/johnlindquist/mdflow/commit/b3887cdf8bb26f883380369777989709ec59cbaf))
+* **telemetry:** add run telemetry logging ([7bd4781](https://github.com/johnlindquist/mdflow/commit/7bd47814d7046adc1395fc0aaf9c9038c832d032))
+* **workflow:** add multi-step workflow engine with DAG execution and step caching ([5287827](https://github.com/johnlindquist/mdflow/commit/52878272a79191a9e2936245443a0f1592721c9b))
+
+
+### BREAKING CHANGES
+
+* docs and examples now describe v3 semantics (engine:,
+default engine pi, document rule for frontmatter-less files).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+* bare .md files no longer error with COMMAND_MISSING — they
+either run on the resolved engine (frontmatter present) or print as
+documents (no frontmatter). Frontmatter tool:/_tool: still resolve but warn;
+use engine:. --engine is the canonical flag; --_command/-_c/--tool remain as
+deprecated aliases. resolveCommand() no longer throws for missing commands.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+## [Unreleased]
+
+### Features
+
+* standardize typed error model with stable `errorCode` metadata and helper utilities ([b866d59](https://github.com/johnlindquist/mdflow/commit/b866d59))
+* enforce typed `_inputs` schemas and add non-throwing parse result unions for schema validation ([28dfcc1](https://github.com/johnlindquist/mdflow/commit/28dfcc1))
+
+### Bug Fixes
+
+* wire structured `MdflowError` handling through config loading and top-level CLI entrypoint ([5af774b](https://github.com/johnlindquist/mdflow/commit/5af774b))
+* harden local/URL import validation and tighten markerless fallback behavior ([06e0a1a](https://github.com/johnlindquist/mdflow/commit/06e0a1a), [fb0af00](https://github.com/johnlindquist/mdflow/commit/fb0af00))
+* dedupe shell argument escaping to reduce platform-specific quoting drift ([bbbc9d0](https://github.com/johnlindquist/mdflow/commit/bbbc9d0))
+
+### Tests
+
+* expand security, path, command escaping, and error metadata coverage for release hardening ([902ed97](https://github.com/johnlindquist/mdflow/commit/902ed97), [3e530f8](https://github.com/johnlindquist/mdflow/commit/3e530f8), [c4e3fe4](https://github.com/johnlindquist/mdflow/commit/c4e3fe4))
+
 ## [2.35.5](https://github.com/johnlindquist/mdflow/compare/v2.35.4...v2.35.5) (2025-12-19)
 
 

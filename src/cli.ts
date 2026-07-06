@@ -183,6 +183,7 @@ Usage: md <file.md> [flags for the command]
 Commands:
   md create [name] [flags]      Create a new agent file
   md explain <agent.md>         Show resolved config without executing
+  md eval <flow.md>             Run the flow's eval suite (<flow>.eval.ts) — costs engine turns
   md setup                      Configure shell (PATH, aliases)
   md logs                       Show agent log directory
   md help                       Show this help
@@ -203,9 +204,14 @@ Create options:
   md create -n task -p          Create in project .mdflow/ folder
   md create -g --model gpt-4    Create globally with frontmatter
 
-Command resolution:
-  1. --_command flag (e.g., md task.md --_command claude)
-  2. Filename pattern (e.g., task.claude.md → claude)
+Engine resolution (most explicit wins):
+  1. --engine flag (deprecated aliases: --_command/-_c, --tool)
+  2. MDFLOW_ENGINE environment variable
+  3. Filename pattern (e.g., task.claude.md → claude; must name a real engine)
+  4. Frontmatter key (engine: claude; deprecated: tool:/_tool:)
+  5. Config engine: (project .mdflow.yaml beats ~/.mdflow/config.yaml)
+  6. Built-in default: pi
+  A file with no frontmatter and no explicit engine is printed as a document.
 
 Agent file discovery (in priority order):
   1. Explicit path:      md ./path/to/agent.md
@@ -214,7 +220,7 @@ Agent file discovery (in priority order):
   4. $PATH directories
   5. Current directory:  ./
 
-All frontmatter keys are passed as CLI flags to the command.
+All non-system frontmatter keys are passed as CLI flags to the command.
 Global defaults can be set in ~/.mdflow/config.yaml
 
 Remote execution:
@@ -225,9 +231,10 @@ Remote execution:
 Examples:
   md task.claude.md -p "print mode"
   md task.claude.md --model opus --verbose
-  md commit.gemini.md
-  md task.md --_command claude
-  md task.md -_c gemini
+  md commit.agy.md
+  md task.md                      # engine via the ladder (default: pi)
+  md task.md --engine claude
+  md eval task.md                 # run the flow's eval suite
   md task.claude.md --_dry-run    # Preview without executing
   md https://example.com/agent.claude.md            # Remote execution
   md https://example.com/agent.claude.md --_trust   # Skip trust prompt
@@ -238,7 +245,7 @@ Config file example (~/.mdflow/config.yaml):
       $1: prompt    # Map body to --prompt flag
 
 md-specific flags (consumed, not passed to command):
-  --_command, -_c   Specify command to run
+  --engine          Specify the engine to run (deprecated aliases: --_command/-_c, --tool)
   --_dry-run        Show resolved command and prompt without executing
   --_edit           Open resolved prompt in $EDITOR before execution
   --_trust          Skip trust prompt for remote URLs (TOFU bypass)
@@ -247,6 +254,7 @@ md-specific flags (consumed, not passed to command):
   --_context        Show context tree and exit (no execution)
   --_quiet          Skip context dashboard display before execution
   --_no-menu        Disable post-run action menu (for scripting/piping)
+  --json            Emit a single JSON result object and disable interactive UI
 
 Without arguments:
   md              Interactive agent picker (from ./.mdflow/, ~/.mdflow/, etc.)

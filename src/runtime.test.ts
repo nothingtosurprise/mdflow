@@ -18,6 +18,7 @@ import {
   type ExecutionPlan,
 } from "./runtime";
 import { clearConfigCache } from "./config";
+import { DEFAULT_ENGINE } from "./command";
 
 describe("AgentRuntime", () => {
   let tempDir: string;
@@ -338,14 +339,17 @@ Test prompt`);
   });
 
   describe("Error Handling", () => {
-    it("throws descriptive error for command resolution failure", async () => {
+    it("resolves engine-less workflow steps to the default engine (v3)", async () => {
       const filePath = join(tempDir, "nocommand.md");
       await writeFile(filePath, `---\n---\nBody`);
 
       const runtime = createRuntime();
       const resolved = await runtime.resolve(filePath);
 
-      await expect(runtime.buildContext(resolved)).rejects.toThrow("No command specified");
+      // A step listed in a workflow is explicitly executable, so the ladder
+      // applies all the way down to the built-in default.
+      const context = await runtime.buildContext(resolved);
+      expect(context.command).toBe(DEFAULT_ENGINE);
     });
 
     it("throws error for circular imports", async () => {

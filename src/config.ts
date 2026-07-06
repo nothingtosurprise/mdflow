@@ -52,6 +52,7 @@ import yaml from "js-yaml";
 import type { AgentFrontmatter, GlobalConfig, CommandDefaults, RunContext } from "./types";
 import { getAdapter, buildBuiltinDefaults } from "./adapters";
 import { safeParseConfig } from "./schema";
+import { ConfigError, getErrorMessage } from "./errors";
 
 // Re-export types for convenience
 export type { GlobalConfig, CommandDefaults } from "./types";
@@ -132,16 +133,43 @@ export function findGitRoot(startPath: string): string | null {
   // Walk up until we hit the filesystem root (when dirname returns the same path)
   while (current !== previous) {
     const gitPath = join(current, ".git");
-    if (existsSync(gitPath)) {
-      // Check if .git is a directory (normal repo) or file (worktree)
-      try {
-        const stat = statSync(gitPath);
-        if (stat.isDirectory() || stat.isFile()) {
-          return current;
+    try {
+      if (existsSync(gitPath)) {
+        // Check if .git is a directory (normal repo) or file (worktree)
+        try {
+          const stat = statSync(gitPath);
+          if (stat.isDirectory() || stat.isFile()) {
+            return current;
+          }
+        } catch (err) {
+          throw new ConfigError(
+            `Failed to inspect git marker "${gitPath}" while discovering project config scope.`,
+            {
+              errorCode: "CONFIG_FILE_DISCOVERY_FAILED",
+              context: {
+                gitPath,
+                currentPath: current,
+                suggestion: "Check directory permissions or run from a readable working directory.",
+              },
+              cause: err,
+            }
+          );
         }
-      } catch {
-        // Continue searching if stat fails
       }
+    } catch (err) {
+      if (err instanceof ConfigError) throw err;
+      throw new ConfigError(
+        `Failed to check git marker path "${gitPath}".`,
+        {
+          errorCode: "CONFIG_FILE_DISCOVERY_FAILED",
+          context: {
+            gitPath,
+            currentPath: current,
+            suggestion: "Ensure parent directories are accessible.",
+          },
+          cause: err,
+        }
+      );
     }
     previous = current;
     current = dirname(current);
@@ -158,11 +186,30 @@ export function findGitRoot(startPath: string): string | null {
 function findProjectConfigFile(dir: string): string | null {
   for (const name of PROJECT_CONFIG_NAMES) {
     const configPath = join(dir, name);
-    if (existsSync(configPath)) {
-      return configPath;
+    try {
+      if (existsSync(configPath)) {
+        return configPath;
+      }
+    } catch (err) {
+      throw new ConfigError(
+        `Failed while checking config path "${configPath}".`,
+        {
+          errorCode: "CONFIG_FILE_DISCOVERY_FAILED",
+          context: {
+            directory: dir,
+            configPath,
+            suggestion: "Check directory permissions and ensure the path is accessible.",
+          },
+          cause: err,
+        }
+      );
     }
   }
   return null;
+}
+
+function formatConfigWarning(err: ConfigError): string {
+  return `Warning [${err.errorCode}]: ${err.message}`;
 }
 
 /**
@@ -174,38 +221,97 @@ function findProjectConfigFile(dir: string): string | null {
  * @returns Validated config or null if file doesn't exist or is invalid
  */
 async function loadConfigFile(filePath: string, throwOnInvalid: boolean = false): Promise<GlobalConfig | null> {
-  try {
-    const file = Bun.file(filePath);
-    if (!await file.exists()) {
-      return null;
-    }
-    const content = await file.text();
+  const file = Bun.file(filePath);
+  let exists = false;
 
-    let parsed: unknown;
+  try {
+    exists = await file.exists();
+  } catch (err) {
+    const wrapped = new ConfigError(
+      `Unable to access config file "${filePath}".`,
+      {
+        errorCode: "CONFIG_FILE_READ_FAILED",
+        context: {
+          filePath,
+          suggestion: "Ensure the file path is valid and readable by your current user.",
+        },
+        cause: err,
+      }
+    );
+    if (throwOnInvalid) throw wrapped;
+    console.warn(formatConfigWarning(wrapped));
+    return null;
+  }
+
+  if (!exists) {
+    return null;
+  }
+
+  let content = "";
+  try {
+    content = await file.text();
+  } catch (err) {
+    const wrapped = new ConfigError(
+      `Failed to read config file "${filePath}".`,
+      {
+        errorCode: "CONFIG_FILE_READ_FAILED",
+        context: {
+          filePath,
+          suggestion: "Check file permissions (e.g. chmod 644) and verify the file is not locked.",
+        },
+        cause: err,
+      }
+    );
+    if (throwOnInvalid) throw wrapped;
+    console.warn(formatConfigWarning(wrapped));
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
     if (filePath.endsWith(".json")) {
       parsed = JSON.parse(content);
     } else {
       parsed = yaml.load(content);
     }
-
-    // Validate with Zod schema
-    const validation = safeParseConfig(parsed);
-    if (!validation.success) {
-      const errorMsg = `Invalid config file ${filePath}:\n  ${validation.errors?.join("\n  ")}`;
-      if (throwOnInvalid) {
-        throw new Error(errorMsg);
-      }
-      console.warn(`Warning: ${errorMsg}`);
-      return null;
-    }
-
-    return validation.data as GlobalConfig;
   } catch (err) {
-    if (throwOnInvalid) throw err;
-    // Log parse errors instead of failing silently
-    console.warn(`Warning: Failed to parse config file ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+    const wrapped = new ConfigError(
+      `Failed to parse config file "${filePath}".`,
+      {
+        errorCode: "CONFIG_FILE_PARSE_FAILED",
+        context: {
+          filePath,
+          suggestion: filePath.endsWith(".json")
+            ? "Validate JSON syntax (trailing commas and quote mismatches are common)."
+            : "Validate YAML syntax and indentation.",
+        },
+        cause: err,
+      }
+    );
+    if (throwOnInvalid) throw wrapped;
+    console.warn(formatConfigWarning(wrapped));
     return null;
   }
+
+  // Validate with Zod schema
+  const validation = safeParseConfig(parsed);
+  if (!validation.success) {
+    const wrapped = new ConfigError(
+      `Invalid config file "${filePath}". ${validation.errors?.join("; ")}`,
+      {
+        errorCode: "CONFIG_FILE_VALIDATION_FAILED",
+        context: {
+          filePath,
+          suggestion: "Run `md setup` to regenerate defaults, then merge your custom values.",
+        },
+      }
+    );
+    if (throwOnInvalid) throw wrapped;
+    console.warn(formatConfigWarning(wrapped));
+    return null;
+  }
+
+  return validation.data as GlobalConfig;
 }
 
 /**
@@ -253,18 +359,67 @@ export async function loadProjectConfig(cwd: string): Promise<GlobalConfig> {
  * Always returns a fresh copy to ensure isolation between callers.
  */
 export async function loadGlobalConfig(): Promise<GlobalConfig> {
+  const file = Bun.file(CONFIG_FILE);
+  let exists = false;
+
   try {
-    const file = Bun.file(CONFIG_FILE);
-    if (await file.exists()) {
-      const content = await file.text();
-      const parsed = yaml.load(content) as GlobalConfig;
-      // Merge with built-in defaults (user config takes priority)
-      return mergeConfigs(BUILTIN_DEFAULTS, parsed);
-    }
+    exists = await file.exists();
   } catch (err) {
-    // Log error and fall back to built-in defaults
-    console.warn(`Warning: Failed to load global config ${CONFIG_FILE}: ${err instanceof Error ? err.message : String(err)}`);
+    const wrapped = new ConfigError(
+      `Failed to access global config "${CONFIG_FILE}".`,
+      {
+        errorCode: "CONFIG_FILE_READ_FAILED",
+        context: {
+          filePath: CONFIG_FILE,
+          suggestion: "Check your home directory permissions and that ~/.mdflow is readable.",
+        },
+        cause: err,
+      }
+    );
+    console.warn(formatConfigWarning(wrapped));
+    return mergeConfigs(BUILTIN_DEFAULTS, {});
   }
+
+  if (!exists) {
+    return mergeConfigs(BUILTIN_DEFAULTS, {});
+  }
+
+  try {
+    const content = await file.text();
+    const parsed = yaml.load(content);
+    const validation = safeParseConfig(parsed);
+    if (!validation.success) {
+      const wrapped = new ConfigError(
+        `Global config "${CONFIG_FILE}" is invalid. ${validation.errors?.join("; ")}`,
+        {
+          errorCode: "CONFIG_FILE_VALIDATION_FAILED",
+          context: {
+            filePath: CONFIG_FILE,
+            suggestion: "Fix the listed keys, or temporarily move the file and rerun `md setup`.",
+          },
+        }
+      );
+      console.warn(formatConfigWarning(wrapped));
+      return mergeConfigs(BUILTIN_DEFAULTS, {});
+    }
+
+    // Merge with built-in defaults (user config takes priority)
+    return mergeConfigs(BUILTIN_DEFAULTS, validation.data as GlobalConfig);
+  } catch (err) {
+    const wrapped = new ConfigError(
+      `Failed to parse global config "${CONFIG_FILE}": ${getErrorMessage(err)}`,
+      {
+        errorCode: "CONFIG_FILE_PARSE_FAILED",
+        context: {
+          filePath: CONFIG_FILE,
+          suggestion: "Validate YAML syntax and indentation in ~/.mdflow/config.yaml.",
+        },
+        cause: err,
+      }
+    );
+    console.warn(formatConfigWarning(wrapped));
+  }
+
   // Return a deep clone to ensure callers get an independent copy
   return mergeConfigs(BUILTIN_DEFAULTS, {});
 }
@@ -288,6 +443,10 @@ export async function loadFullConfig(cwd: string = process.cwd()): Promise<Globa
 function deepCloneConfig(config: GlobalConfig): GlobalConfig {
   const result: GlobalConfig = {};
 
+  if (config.engine !== undefined) {
+    result.engine = config.engine;
+  }
+
   if (config.commands) {
     result.commands = {};
     for (const [cmd, defaults] of Object.entries(config.commands)) {
@@ -305,6 +464,10 @@ function deepCloneConfig(config: GlobalConfig): GlobalConfig {
 export function mergeConfigs(base: GlobalConfig, override: GlobalConfig): GlobalConfig {
   // Start with a deep clone of base
   const result = deepCloneConfig(base);
+
+  if (override.engine !== undefined) {
+    result.engine = override.engine;
+  }
 
   if (override.commands) {
     result.commands = result.commands ? { ...result.commands } : {};

@@ -40,12 +40,13 @@ describe("Output Stream Separation", () => {
 
       const result = await spawnTestScript(testScript, tempDir);
 
-      // Stderr should contain status messages
-      expect(result.stderr).toContain("Fetching:");
-      expect(result.stderr).toContain("Saved to:");
+      // Stderr should carry the status message. Wording depends on the global
+      // remote cache (cold fetch vs. cache hit) — either way it must be stderr.
+      const statusPattern = /Fetching:|Cache hit:/;
+      expect(result.stderr).toMatch(statusPattern);
 
       // Stdout should only contain our JSON result
-      expect(result.stdout).not.toContain("Fetching:");
+      expect(result.stdout).not.toMatch(statusPattern);
       expect(result.stdout).not.toContain("Saved to:");
 
       const parsed = JSON.parse(result.stdout.trim());
@@ -98,7 +99,7 @@ describe("Output Stream Separation", () => {
   });
 
   describe("Plain markdown file output", () => {
-    test("plain markdown without command pattern outputs error to stderr", async () => {
+    test("plain markdown without an engine is printed as a document (v3)", async () => {
       const mdPath = await createTestAgent(
         tempDir,
         "plain.md",
@@ -107,8 +108,9 @@ describe("Output Stream Separation", () => {
 
       const result = await spawnMd([mdPath]);
 
-      expect(result.stderr).toContain("No command specified");
-      expect(result.stdout.trim()).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("# Hello World");
+      expect(result.stdout).toContain("This is plain markdown.");
     });
   });
 
@@ -118,6 +120,7 @@ describe("Output Stream Separation", () => {
         tempDir,
         "echo.md",
         `---
+engine: echo
 model: test
 ---
 Echo test content`

@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeEach, afterEach } from "bun:test";
+import { expect, test, describe, beforeEach, afterEach, spyOn } from "bun:test";
 import {
   loadGlobalConfig,
   getCommandDefaults,
@@ -8,10 +8,11 @@ import {
   findGitRoot,
   loadProjectConfig,
   loadFullConfig,
+  mergeConfigs,
   clearProjectConfigCache,
 } from "./config";
 import type { AgentFrontmatter } from "./types";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, chmodSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -172,6 +173,21 @@ describe("loadProjectConfig", () => {
     const config = await loadProjectConfig(testDir);
     expect(config).toEqual({});
   });
+
+  test("warns with structured code when config path is not a readable file", async () => {
+    const configPath = join(testDir, "mdflow.config.yaml");
+    writeFileSync(configPath, "commands:\n  claude:\n    model: sonnet\n");
+    chmodSync(configPath, 0o000);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    const config = await loadProjectConfig(testDir);
+
+    expect(config).toEqual({});
+    expect(warnSpy.mock.calls.some(([msg]) => String(msg).includes("CONFIG_FILE_READ_FAILED"))).toBe(true);
+
+    chmodSync(configPath, 0o644);
+    warnSpy.mockRestore();
+  });
 });
 
 describe("loadFullConfig", () => {
@@ -202,6 +218,19 @@ describe("loadFullConfig", () => {
 
     const config = await loadFullConfig(testDir);
     expect(config.commands?.copilot?.$1).toBe("custom-prompt");
+  });
+
+  test("project config can set the default engine", async () => {
+    writeFileSync(join(testDir, "mdflow.config.yaml"), `engine: claude\n`);
+
+    const config = await loadFullConfig(testDir);
+    expect(config.engine).toBe("claude");
+  });
+
+  test("mergeConfigs: override engine wins, base engine survives otherwise", () => {
+    expect(mergeConfigs({ engine: "claude" }, { engine: "codex" }).engine).toBe("codex");
+    expect(mergeConfigs({ engine: "claude" }, {}).engine).toBe("claude");
+    expect(mergeConfigs({}, {}).engine).toBeUndefined();
   });
 
   test("project config adds new commands", async () => {

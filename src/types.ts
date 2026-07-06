@@ -13,25 +13,109 @@ export interface IOStreams {
 }
 
 /**
- * Input definition for form-style prompts
- * Supports multiple input types with validation and defaults
+ * Frontmatter keys for underscore-prefixed system/template fields.
+ * Examples: `_inputs`, `_env`, `_output`, `_steps`, `_name`, `_target`.
  */
-export interface InputDefinition {
-  /** Type of input prompt to display */
-  type: 'text' | 'select' | 'number' | 'confirm' | 'password';
+export type ReservedFrontmatterSystemKey =
+  | "_inputs"
+  | "_env"
+  | "_output"
+  | "_interactive"
+  | "_i"
+  | "_cwd"
+  | "_subcommand"
+  | "_dry-run"
+  | "_edit"
+  | "_trust"
+  | "_no-cache"
+  | "_no-menu"
+  | "_command"
+  | "_c"
+  | "_steps"
+  | "_workflow"
+  | "_context_budget_tokens"
+  | "_max_prompt_tokens"
+  | "_max_runtime_ms";
+
+export type FrontmatterSystemKey = ReservedFrontmatterSystemKey | `_${string}`;
+
+/**
+ * Frontmatter keys for positional argument mappings.
+ * Examples: `$1`, `$2`, `$10`.
+ */
+export type FrontmatterPositionalKey = `$${number}`;
+
+/**
+ * Values supported in YAML frontmatter/config payloads.
+ * Keeps passthrough keys typed without falling back to `any`.
+ */
+export type FrontmatterValue =
+  | string
+  | number
+  | boolean
+  | null
+  | FrontmatterValue[]
+  | { [key: string]: FrontmatterValue }
+  | undefined;
+
+type InputDefinitionBase = {
   /** Description/help text shown to user */
   description?: string;
-  /** Default value for the input */
-  default?: string | number | boolean;
+  /** Whether the input is required (defaults to true) */
+  required?: boolean;
+};
+
+type TextInputDefinition = InputDefinitionBase & {
+  /** Type of input prompt to display */
+  type: "text";
+  /** Default value for text input */
+  default?: string;
+};
+
+type SelectInputDefinition = InputDefinitionBase & {
+  /** Type of input prompt to display */
+  type: "select";
   /** Options for select type */
-  options?: string[];
+  options: string[];
+  /** Default selected option */
+  default?: string;
+};
+
+type NumberInputDefinition = InputDefinitionBase & {
+  /** Type of input prompt to display */
+  type: "number";
+  /** Default numeric value */
+  default?: number;
   /** Minimum value for number type */
   min?: number;
   /** Maximum value for number type */
   max?: number;
-  /** Whether the input is required (defaults to true) */
-  required?: boolean;
-}
+};
+
+type ConfirmInputDefinition = InputDefinitionBase & {
+  /** Type of input prompt to display */
+  type: "confirm";
+  /** Default confirmation state */
+  default?: boolean;
+};
+
+type PasswordInputDefinition = InputDefinitionBase & {
+  /** Type of input prompt to display */
+  type: "password";
+  /** Optional default value (rarely used) */
+  default?: string;
+};
+
+/**
+ * Input definition for form-style prompts.
+ * Discriminated by `type` so each prompt variant has type-safe fields.
+ */
+export type InputDefinition =
+  | TextInputDefinition
+  | SelectInputDefinition
+  | NumberInputDefinition
+  | ConfirmInputDefinition
+  | PasswordInputDefinition;
 
 /**
  * Form inputs schema - maps variable names to their input definitions
@@ -47,7 +131,21 @@ export interface InputDefinition {
  *     options: [dev, staging, prod]
  * ```
  */
-export type FormInputs = Record<string, InputDefinition>;
+export type FormInputs = Record<FrontmatterSystemKey, InputDefinition>;
+
+/**
+ * Structured output behavior for post-command processing.
+ */
+export interface StructuredOutputConfig {
+  /** Expected output format for extraction */
+  format?: "json" | "text" | "patch";
+  /** Optional schema ref in `<path>#<ExportName>` format */
+  schema?: string;
+  /** Optional path to save extracted output */
+  save?: string;
+  /** Whether to apply extracted output as a patch via git apply */
+  apply?: boolean;
+}
 
 /** Frontmatter configuration - keys become CLI flags */
 export interface AgentFrontmatter {
@@ -66,6 +164,45 @@ export interface AgentFrontmatter {
   _env?: Record<string, string>;
 
   /**
+   * Structured output processing config.
+   * Runs extraction -> optional schema validation -> sink actions.
+   */
+  _output?: StructuredOutputConfig;
+
+  /**
+   * Multi-step workflow definition.
+   * When present, mdflow executes `_steps` as a dependency graph instead of
+   * running a single prompt body once.
+   */
+  _steps?: FrontmatterValue[];
+
+  /**
+   * Optional token budget for context providers (@git:diff, @tree, etc.).
+   * When set, provider output is truncated/summarized to fit this budget.
+   */
+  _context_budget_tokens?: number;
+
+  /**
+   * Maximum allowed prompt token estimate before execution.
+   * If estimated prompt tokens exceed this limit, execution is blocked.
+   */
+  _max_prompt_tokens?: number;
+
+  /**
+   * Maximum allowed runtime in milliseconds.
+   * Used for telemetry budget enforcement checks.
+   */
+  _max_runtime_ms?: number;
+
+  /**
+   * Engine (agent CLI) that executes this flow, e.g. "claude", "codex", "pi".
+   * v3 system key — replaces the deprecated `tool:`/`_tool:` aliases and is
+   * never passed as a CLI flag. When absent, the resolution ladder applies
+   * (env var, filename, config, then the built-in default).
+   */
+  engine?: string;
+
+  /**
    * Context window limit override (in tokens)
    * If set, overrides the model-based default context limit
    * Useful for custom models or when you want to enforce a specific limit
@@ -78,16 +215,17 @@ export interface AgentFrontmatter {
    * Maps positional arguments to CLI flags
    * Example: $1: prompt → body becomes --prompt <body>
    */
-  [key: `$${number}`]: string;
+  [key: FrontmatterPositionalKey]: string;
 
   /**
    * Template variables (_varname)
    * Underscore-prefixed keys are template variables, not passed to CLI.
    * Available in body as {{ _varname }}, can be overridden via --_varname CLI flag.
    * Example: _name: "default" → {{ _name }} in body → --_name "override"
-   * Note: Also includes system keys like _inputs (string[]) and _env (Record<string, string>)
+   * Note: Also includes system keys like _inputs, _env, _output, _steps,
+   * _context_budget_tokens, _max_prompt_tokens, and _max_runtime_ms.
    */
-  [key: `_${string}`]: unknown;
+  [key: FrontmatterSystemKey]: FrontmatterValue;
 
   /**
    * All other keys are passed directly as CLI flags to the command.
@@ -96,14 +234,20 @@ export interface AgentFrontmatter {
    * - Boolean false: (omitted)
    * - Arrays: --key value1 --key value2
    */
-  [key: string]: unknown;
+  [key: string]: FrontmatterValue;
 }
 
+/**
+ * Parsed markdown content split into frontmatter and body.
+ */
 export interface ParsedMarkdown {
   frontmatter: AgentFrontmatter;
   body: string;
 }
 
+/**
+ * Result from command execution.
+ */
 export interface CommandResult {
   command: string;
   output: string;
@@ -160,6 +304,13 @@ export interface Logger {
  * Global configuration structure for mdflow
  */
 export interface GlobalConfig {
+  /**
+   * Default engine for flows that don't name one via filename or frontmatter.
+   * Project config (mdflow.config.yaml / .mdflow.yaml / .mdflow.json) beats
+   * ~/.mdflow/config.yaml; the built-in default applies when neither sets it.
+   */
+  engine?: string;
+
   /** Default settings per command */
   commands?: Record<string, CommandDefaults>;
 }
@@ -171,14 +322,14 @@ export interface GlobalConfig {
  */
 export interface CommandDefaults {
   /** Map positional arg N to a flag (e.g., $1: "prompt" → --prompt <body>) */
-  [key: `$${number}`]: string;
+  [key: FrontmatterPositionalKey]: string;
   /**
    * Context window limit override (in tokens)
    * Overrides model-based defaults for token limit calculations
    */
   context_window?: number;
   /** Default flag values */
-  [key: string]: unknown;
+  [key: string]: FrontmatterValue;
 }
 
 /**
@@ -239,6 +390,59 @@ export interface ToolAdapter {
    *
    * @param frontmatter - The frontmatter after defaults are applied
    * @returns Transformed frontmatter for interactive mode
-   */
+  */
   applyInteractiveMode(frontmatter: AgentFrontmatter): AgentFrontmatter;
+
+  /**
+   * Optional: contribute environment variables to the engine process, called
+   * once just before spawn. Adapter vars never override an existing
+   * process.env value or explicit run env (e.g. frontmatter _env).
+   * Used by the pi adapter to point PI_CODING_AGENT_DIR at the bridged,
+   * hermetic agent dir.
+   */
+  prepareEnv?(): Record<string, string> | undefined;
+}
+
+/**
+ * Portable adapter capability flags.
+ * Used by the portable agent spec translation layer.
+ */
+export interface AdapterCapabilities {
+  /** Whether canonical `model` key is supported */
+  model: boolean;
+  /** Whether canonical `temperature` key is supported */
+  temperature: boolean;
+  /** Whether canonical `max-tokens` key is supported */
+  maxTokens: boolean;
+}
+
+/**
+ * Adapter interface for provider-agnostic frontmatter translation.
+ *
+ * This adapter layer maps canonical keys (model, temperature, max-tokens)
+ * to provider-specific CLI flags before argument construction.
+ */
+export interface Adapter {
+  /** Tool/provider name (e.g., "claude", "codex") */
+  name: string;
+  /** Declares canonical key support for this provider */
+  capabilities: AdapterCapabilities;
+
+  /**
+   * Normalize/canonicalize frontmatter before building args.
+   * Example: convert max_tokens/maxTokens to max-tokens.
+   */
+  normalizeFrontmatter(frontmatter: AgentFrontmatter): AgentFrontmatter;
+
+  /**
+   * Build CLI args for this provider from normalized frontmatter.
+   *
+   * `buildGenericArgs` is provided by command.ts and applies generic
+   * key/value -> flag conversion for all non-system keys.
+   */
+  buildArgs(
+    frontmatter: AgentFrontmatter,
+    templateVars: Set<string>,
+    buildGenericArgs: (frontmatter: AgentFrontmatter, templateVars: Set<string>) => string[]
+  ): string[];
 }

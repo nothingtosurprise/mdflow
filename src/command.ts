@@ -5,12 +5,15 @@
  * Integrates with ProcessManager for centralized process lifecycle management
  */
 
-import type { AgentFrontmatter } from "./types";
+import type { AgentFrontmatter, Adapter } from "./types";
 import { basename } from "path";
 import { teeToStdoutAndCollect, teeToStderrAndCollect, teeToStdoutWithMarkdownAndCollect } from "./stream";
 import { stopSpinner, isSpinnerRunning } from "./spinner";
 import { getProcessManager } from "./process-manager";
 import { createStreamingRenderer, type StreamingMarkdownRenderer } from "./markdown-renderer";
+import { getRegisteredAdapters, getPortableAdapter, getAdapter as getEngineAdapter, hasAdapter } from "./adapters";
+import { CommandError } from "./errors";
+import { escapeShellArg as escapeShellArgShared } from "./security";
 
 /**
  * Module-level reference to the current child process
@@ -86,9 +89,18 @@ const SYSTEM_KEYS = new Set([
   "_no-cache",
   "_no-menu", // Disable post-run action menu
 
-  // Command override
+  // Engine selection (v3 key + deprecated v2 aliases)
+  "engine",
   "_command",
   "_c",
+  "tool",
+  "_tool",
+
+  // Flow metadata (v3): human/roster-facing, never CLI flags. `description`
+  // is what marks a minimal file as a flow; `route` is reserved for keyword
+  // routing.
+  "description",
+  "route",
 ]);
 
 /**
@@ -138,20 +150,230 @@ export function hasInteractiveMarker(filePath: string): boolean {
   return /\.i\.[^.]+\.md$/i.test(name);
 }
 
-/**
- * Resolve command from filename pattern
- * Note: --_command flag is handled in index.ts before this is called
- */
-export function resolveCommand(filePath: string): string {
-  const fromFilename = parseCommandFromFilename(filePath);
-  if (fromFilename) {
-    return fromFilename;
+function validateResolvedCommand(
+  candidate: string,
+  source: "filename" | "frontmatter" | "env" | "config",
+  filePath: string
+): string {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    throw new CommandError(
+      `Unable to resolve command from "${source}" in "${filePath}". The command value is empty.`,
+      {
+        errorCode: "COMMAND_INVALID",
+        context: { filePath, source, suggestion: "Set --_command/--tool, rename to task.<tool>.md, or add frontmatter tool: <tool>." },
+      }
+    );
   }
 
-  throw new Error(
-    "No command specified. Use --_command flag, " +
-    "or name your file like 'task.claude.md'"
+  if (!isValidCommandToken(trimmed)) {
+    const didYouMean = formatDidYouMean(trimmed);
+    throw new CommandError(
+      `Invalid command "${trimmed}" from ${source} in "${filePath}".${didYouMean} ` +
+      "Use a command token with letters, numbers, dots, underscores, or hyphens.",
+      {
+        errorCode: "COMMAND_INVALID",
+        context: { filePath, command: trimmed, source },
+      }
+    );
+  }
+
+  return trimmed;
+}
+
+/**
+ * The engine used when nothing else names one. pi is the flagship learnable
+ * engine (full event telemetry, subscription auth bridge), so it is the v3
+ * default; every other engine is one `engine:` line away.
+ */
+export const DEFAULT_ENGINE = "pi";
+
+/** Which rung of the resolution ladder produced the engine. */
+export type EngineSource = "cli" | "env" | "filename" | "frontmatter" | "config" | "default";
+
+export interface ResolvedEngine {
+  engine: string;
+  source: EngineSource;
+  /** Set when the engine came from a deprecated frontmatter key. */
+  deprecatedKey?: "tool" | "_tool";
+  /**
+   * Set when the filename had an engine-shaped segment that names no known
+   * engine (no registered adapter, no binary on PATH) — e.g. report.final.md.
+   * The ladder fell through; callers should surface this so a typo like
+   * task.claud.md doesn't silently run on the default engine.
+   */
+  skippedFilenameEngine?: string;
+}
+
+/**
+ * A filename segment only claims the engine rung when it names something
+ * that can actually run: a registered adapter or a binary on PATH. This keeps
+ * v3's bare dotted filenames (report.final.md) from being misread as engines
+ * while .echo.md-style custom engines keep working.
+ */
+function filenameEngineExists(candidate: string): boolean {
+  if (hasAdapter(candidate)) return true;
+  try {
+    return Bun.which(candidate) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extract the engine from frontmatter. `engine:` is the v3 key; `tool:` and
+ * `_tool:` are deprecated v2 aliases (in that precedence order).
+ */
+export function parseEngineFromFrontmatter(
+  frontmatter: AgentFrontmatter
+): { engine: string; key: "engine" | "tool" | "_tool" } | undefined {
+  const engine = frontmatter.engine;
+  if (typeof engine === "string") return { engine, key: "engine" };
+
+  const tool = frontmatter.tool;
+  if (typeof tool === "string") return { engine: tool, key: "tool" };
+
+  const underscoreTool = frontmatter._tool;
+  if (typeof underscoreTool === "string") return { engine: underscoreTool, key: "_tool" };
+
+  return undefined;
+}
+
+/**
+ * @deprecated v3: use `parseEngineFromFrontmatter` (this reads only the
+ * legacy `tool:`/`_tool:` keys).
+ */
+export function parseCommandFromFrontmatter(frontmatter: AgentFrontmatter): string | undefined {
+  const tool = frontmatter.tool;
+  if (typeof tool === "string") return tool;
+
+  const underscoreTool = frontmatter._tool;
+  if (typeof underscoreTool === "string") return underscoreTool;
+
+  return undefined;
+}
+
+/**
+ * Resolve the engine for a flow file. The ladder, most explicit first:
+ *
+ * 1) `--engine` CLI flag        (handled upstream in cli-runner)
+ * 2) MDFLOW_ENGINE env var      ("run everything on X" override)
+ * 3) filename suffix            (`task.claude.md`)
+ * 4) frontmatter `engine:`      (aliases: deprecated `tool:`/`_tool:`)
+ * 5) config `engine:`           (project config beats ~/.mdflow/config.yaml)
+ * 6) built-in default           (DEFAULT_ENGINE)
+ *
+ * Resolution never fails for a missing engine — the default always applies.
+ * Callers decide what implicit resolution means (e.g. a frontmatter-less file
+ * resolved implicitly is a document, not a flow) and surface `source` to the
+ * user so defaults stay inspectable, never magic.
+ */
+export function resolveEngine(
+  filePath: string,
+  frontmatter?: AgentFrontmatter,
+  opts: { configEngine?: string; env?: Record<string, string | undefined> } = {}
+): ResolvedEngine {
+  const env = opts.env ?? process.env;
+
+  const fromEnv = env.MDFLOW_ENGINE;
+  if (typeof fromEnv === "string" && fromEnv.trim()) {
+    return { engine: validateResolvedCommand(fromEnv, "env", filePath), source: "env" };
+  }
+
+  const fromFilename = parseCommandFromFilename(filePath);
+  let skippedFilenameEngine: string | undefined;
+  if (fromFilename) {
+    // Filenames are names, not declarations — the segment only wins when it
+    // names a runnable engine; otherwise fall through (and report the skip so
+    // callers can warn about likely typos like task.claud.md).
+    if (isValidCommandToken(fromFilename.trim()) && filenameEngineExists(fromFilename.trim())) {
+      return { engine: fromFilename.trim(), source: "filename" };
+    }
+    skippedFilenameEngine = fromFilename;
+  }
+
+  const withSkip = (resolved: ResolvedEngine): ResolvedEngine =>
+    skippedFilenameEngine ? { ...resolved, skippedFilenameEngine } : resolved;
+
+  if (frontmatter) {
+    const fromFrontmatter = parseEngineFromFrontmatter(frontmatter);
+    if (fromFrontmatter) {
+      return withSkip({
+        engine: validateResolvedCommand(fromFrontmatter.engine, "frontmatter", filePath),
+        source: "frontmatter",
+        ...(fromFrontmatter.key === "engine" ? {} : { deprecatedKey: fromFrontmatter.key }),
+      });
+    }
+  }
+
+  if (typeof opts.configEngine === "string" && opts.configEngine.trim()) {
+    return withSkip({ engine: validateResolvedCommand(opts.configEngine, "config", filePath), source: "config" });
+  }
+
+  return withSkip({ engine: DEFAULT_ENGINE, source: "default" });
+}
+
+/**
+ * @deprecated v3: use `resolveEngine`, which also reports the resolution
+ * source. This wrapper keeps the engine-only signature and, unlike v2, never
+ * throws for a missing command — the default engine applies instead.
+ */
+export function resolveCommand(filePath: string, frontmatter?: AgentFrontmatter): string {
+  return resolveEngine(filePath, frontmatter).engine;
+}
+
+const VALID_COMMAND_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+function isValidCommandToken(command: string): boolean {
+  return VALID_COMMAND_TOKEN.test(command);
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp: number[][] = Array.from({ length: rows }, (_, i) =>
+    Array.from({ length: cols }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
   );
+
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i]![j] = Math.min(
+        dp[i - 1]![j]! + 1,
+        dp[i]![j - 1]! + 1,
+        dp[i - 1]![j - 1]! + cost
+      );
+    }
+  }
+
+  return dp[rows - 1]![cols - 1]!;
+}
+
+function getCommandSuggestions(command: string, max: number = 3): string[] {
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) return [];
+
+  const candidates = Array.from(new Set(getRegisteredAdapters().map((c) => c.toLowerCase())));
+  const ranked = candidates
+    .map((candidate) => ({ candidate, distance: levenshteinDistance(normalized, candidate) }))
+    .sort((a, b) => a.distance - b.distance || a.candidate.localeCompare(b.candidate));
+
+  const threshold = Math.max(2, Math.ceil(normalized.length * 0.4));
+  return ranked
+    .filter(({ candidate, distance }) =>
+      candidate.startsWith(normalized) ||
+      normalized.startsWith(candidate) ||
+      distance <= threshold
+    )
+    .slice(0, max)
+    .map(({ candidate }) => candidate);
+}
+
+function formatDidYouMean(command: string): string {
+  const suggestions = getCommandSuggestions(command);
+  if (suggestions.length === 0) return "";
+  if (suggestions.length === 1) return `Did you mean '${suggestions[0]}'?`;
+  return `Did you mean one of: ${suggestions.map((s) => `'${s}'`).join(", ")}?`;
 }
 
 /**
@@ -169,7 +391,7 @@ function toFlag(key: string): string {
  * Build CLI args from frontmatter
  * Each key becomes a flag, values become arguments
  */
-export function buildArgs(
+function buildGenericArgs(
   frontmatter: AgentFrontmatter,
   templateVars: Set<string>
 ): string[] {
@@ -219,10 +441,10 @@ export function buildArgs(
       const strValue = String(value);
       // Split comma-separated values for variadic flags
       // Handle both "Read,Edit" and "Bash(git commit:*), Bash(git add:*)"
-      const parts = strValue.includes(', ')
-        ? strValue.split(', ')  // Split on ", " (comma + space)
-        : strValue.includes(',')
-          ? strValue.split(',')  // Split on just ","
+      const parts = strValue.includes(", ")
+        ? strValue.split(", ")  // Split on ", " (comma + space)
+        : strValue.includes(",")
+          ? strValue.split(",")  // Split on just ","
           : [strValue];          // No commas, single value
       for (const part of parts) {
         args.push(`${toFlag(key)}=${part.trim()}`);
@@ -233,6 +455,28 @@ export function buildArgs(
   }
 
   return args;
+}
+
+/**
+ * Resolve portable adapter for a command/provider.
+ */
+export function getAdapter(command: string): Adapter | undefined {
+  if (!command) return undefined;
+  return getPortableAdapter(command);
+}
+
+export function buildArgs(
+  frontmatter: AgentFrontmatter,
+  templateVars: Set<string>,
+  command?: string
+): string[] {
+  const adapter = command ? getAdapter(command) : undefined;
+  if (!adapter) {
+    return buildGenericArgs(frontmatter, templateVars);
+  }
+
+  const normalized = adapter.normalizeFrontmatter(frontmatter);
+  return adapter.buildArgs(normalized, templateVars, buildGenericArgs);
 }
 
 /**
@@ -328,6 +572,24 @@ function normalizeCaptureMode(mode: boolean | CaptureMode): CaptureMode {
   return mode;
 }
 
+function hasNullByte(value: string): boolean {
+  return value.includes("\0");
+}
+
+/**
+ * Escape a CLI argument for shell-safe display in logs/previews.
+ * This is display-only; process execution always uses argv arrays.
+ */
+export function escapeShellArg(arg: string): string {
+  return escapeShellArgShared(arg, process.platform === "win32" ? "win32" : "posix");
+}
+
+function formatSpawnPreview(command: string, args: string[]): string {
+  return [command, ...args]
+    .map((arg) => escapeShellArg(arg))
+    .join(" ");
+}
+
 /**
  * Execute command with positional arguments
  * Positionals are either passed as-is or mapped to flags via $N mappings
@@ -345,13 +607,34 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   const { command, args, positionals, positionalMappings, captureOutput, env, captureStderr = false, rawOutput = false } = ctx;
 
   const mode = normalizeCaptureMode(captureOutput);
+  const normalizedCommand = command.trim();
+
+  if (!normalizedCommand) {
+    console.error("Command not found: empty command value.");
+    console.error("Use --_command <tool> or name your file like task.<tool>.md.");
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
+
+  if (!isValidCommandToken(normalizedCommand)) {
+    const didYouMean = formatDidYouMean(normalizedCommand);
+    console.error(`Invalid command token: '${normalizedCommand}'.`);
+    if (didYouMean) {
+      console.error(didYouMean);
+    }
+    console.error("Use a command/binary name without spaces. Example: --_command claude");
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
 
   // Pre-flight check: verify the command exists
-  const binaryPath = Bun.which(command);
+  const binaryPath = Bun.which(normalizedCommand);
   if (!binaryPath) {
-    console.error(`Command not found: '${command}'`);
-    console.error(`This agent requires '${command}' to be installed and available in your PATH.`);
-    console.error(`Please install it and try again.`);
+    const didYouMean = formatDidYouMean(normalizedCommand);
+    console.error(`Command not found: '${normalizedCommand}'`);
+    if (didYouMean) {
+      console.error(didYouMean);
+    }
+    console.error(`This agent requires '${normalizedCommand}' to be installed and available in your PATH.`);
+    console.error("Install it, or override with --_command <installed-binary>.");
     // Return empty process-like object for backward compatibility
     return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
   }
@@ -375,9 +658,32 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     }
   }
 
+  const invalidArgIndex = finalArgs.findIndex(hasNullByte);
+  if (invalidArgIndex !== -1) {
+    console.error(
+      `Rejected command argument at index ${invalidArgIndex}: null bytes are not allowed in spawned process arguments.`
+    );
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
+
+  // Engine adapters may contribute env vars (e.g. pi's bridged auth dir).
+  // Precedence: adapter vars < process.env < explicit ctx.env — an adapter
+  // never overrides something the user already set.
+  let adapterEnv: Record<string, string> | undefined;
+  // NOTE: command.ts exports its own getAdapter (the portable-key layer), so
+  // the registry lookup is imported under a distinct name.
+  const engineAdapter = getEngineAdapter(normalizedCommand);
+  if (engineAdapter.prepareEnv) {
+    try {
+      adapterEnv = engineAdapter.prepareEnv();
+    } catch (err) {
+      console.error(`Warning [ADAPTER_ENV]: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Merge process.env with provided env
-  const runEnv = env
-    ? { ...process.env, ...env }
+  const runEnv = env || adapterEnv
+    ? { ...adapterEnv, ...process.env, ...env }
     : undefined;
 
   // Determine stdout/stderr pipe config based on mode
@@ -386,7 +692,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   const shouldPipeStdout = mode === "capture" || mode === "tee" || spinnerActive;
   const shouldPipeStderr = (mode === "capture" || mode === "tee") && captureStderr;
 
-  const proc = Bun.spawn([command, ...finalArgs], {
+  const proc = Bun.spawn([normalizedCommand, ...finalArgs], {
     stdout: shouldPipeStdout ? "pipe" : "inherit",
     stderr: shouldPipeStderr ? "pipe" : "inherit",
     stdin: "inherit",
@@ -395,7 +701,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
 
   // Register with ProcessManager for centralized lifecycle management
   const pm = getProcessManager();
-  pm.register(proc, command);
+  pm.register(proc, formatSpawnPreview(normalizedCommand, finalArgs));
 
   // Store reference for legacy signal handling (deprecated)
   currentChildProcess = proc;

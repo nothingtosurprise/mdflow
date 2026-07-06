@@ -1,6 +1,7 @@
-import { expect, test, describe } from "bun:test";
-import { parseCommandFromFilename, resolveCommand, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, runCommand, type CaptureMode } from "./command";
+import { expect, test, describe, spyOn, beforeEach, afterEach } from "bun:test";
+import { parseCommandFromFilename, resolveCommand, resolveEngine, DEFAULT_ENGINE, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, runCommand, type CaptureMode } from "./command";
 import type { AgentFrontmatter } from "./types";
+import { CommandError } from "./errors";
 
 describe("parseCommandFromFilename", () => {
   test("extracts command from filename pattern", () => {
@@ -31,8 +32,84 @@ describe("resolveCommand", () => {
     expect(resolveCommand("review.gemini.md")).toBe("gemini");
   });
 
-  test("throws when no command can be resolved", () => {
-    expect(() => resolveCommand("task.md")).toThrow("No command specified");
+  test("falls back to the default engine instead of throwing (v3)", () => {
+    expect(resolveCommand("task.md")).toBe(DEFAULT_ENGINE);
+  });
+});
+
+describe("resolveEngine ladder", () => {
+  const noEnv = { env: {} };
+
+  test("defaults to DEFAULT_ENGINE when nothing names an engine", () => {
+    const resolved = resolveEngine("task.md", undefined, noEnv);
+    expect(resolved.engine).toBe(DEFAULT_ENGINE);
+    expect(resolved.source).toBe("default");
+  });
+
+  test("config engine beats the built-in default", () => {
+    const resolved = resolveEngine("task.md", undefined, { ...noEnv, configEngine: "claude" });
+    expect(resolved).toEqual({ engine: "claude", source: "config" });
+  });
+
+  test("frontmatter engine: beats config", () => {
+    const resolved = resolveEngine("task.md", { engine: "codex" }, { ...noEnv, configEngine: "claude" });
+    expect(resolved).toEqual({ engine: "codex", source: "frontmatter" });
+  });
+
+  test("filename beats frontmatter", () => {
+    const resolved = resolveEngine("task.claude.md", { engine: "codex" }, noEnv);
+    expect(resolved).toEqual({ engine: "claude", source: "filename" });
+  });
+
+  test("MDFLOW_ENGINE env var beats filename", () => {
+    const resolved = resolveEngine("task.claude.md", undefined, { env: { MDFLOW_ENGINE: "codex" } });
+    expect(resolved).toEqual({ engine: "codex", source: "env" });
+  });
+
+  test("deprecated tool: alias resolves but is flagged", () => {
+    const resolved = resolveEngine("task.md", { tool: "claude" }, noEnv);
+    expect(resolved).toEqual({ engine: "claude", source: "frontmatter", deprecatedKey: "tool" });
+  });
+
+  test("deprecated _tool: alias resolves but is flagged", () => {
+    const resolved = resolveEngine("task.md", { _tool: "claude" }, noEnv);
+    expect(resolved).toEqual({ engine: "claude", source: "frontmatter", deprecatedKey: "_tool" });
+  });
+
+  test("engine: beats deprecated aliases without a deprecation flag", () => {
+    const resolved = resolveEngine("task.md", { engine: "codex", tool: "claude" }, noEnv);
+    expect(resolved).toEqual({ engine: "codex", source: "frontmatter" });
+  });
+
+  test("invalid engine tokens still throw typed errors", () => {
+    expect(() => resolveEngine("task.md", { engine: "cl aude!" }, noEnv)).toThrow(CommandError);
+    expect(() => resolveEngine("task.md", undefined, { env: { MDFLOW_ENGINE: "no/slashes here" } })).toThrow(
+      CommandError
+    );
+  });
+
+  test("filename engine wins only when it names a runnable engine", () => {
+    // Registered adapter: wins.
+    expect(resolveEngine("t.claude.md", undefined, noEnv)).toEqual({ engine: "claude", source: "filename" });
+    // PATH binary that is not a registered adapter: wins (custom engines).
+    expect(resolveEngine("t.echo.md", undefined, noEnv)).toEqual({ engine: "echo", source: "filename" });
+  });
+
+  test("unknown filename engine falls through and is reported", () => {
+    const resolved = resolveEngine("report.nonexistent-command-xyz.md", undefined, noEnv);
+    expect(resolved.engine).toBe(DEFAULT_ENGINE);
+    expect(resolved.source).toBe("default");
+    expect(resolved.skippedFilenameEngine).toBe("nonexistent-command-xyz");
+
+    // Frontmatter still wins over the skipped filename, and the skip is kept.
+    const withFm = resolveEngine("report.nonexistent-command-xyz.md", { engine: "claude" }, noEnv);
+    expect(withFm.engine).toBe("claude");
+    expect(withFm.skippedFilenameEngine).toBe("nonexistent-command-xyz");
+  });
+
+  test("blank env and config values are ignored", () => {
+    const resolved = resolveEngine("task.md", undefined, { env: { MDFLOW_ENGINE: "  " }, configEngine: "" });
+    expect(resolved.source).toBe("default");
   });
 });
 
@@ -357,5 +434,47 @@ describe("runCommand capture modes", () => {
 
     expect(result.exitCode).toBe(42);
     expect(result.stdout.trim()).toBe("before exit");
+  });
+});
+
+describe("runCommand command suggestions", () => {
+  let consoleErrorSpy: ReturnType<typeof spyOn>;
+  let capturedErrors: string[] = [];
+
+  beforeEach(() => {
+    capturedErrors = [];
+    consoleErrorSpy = spyOn(console, "error").mockImplementation((msg: string) => {
+      capturedErrors.push(msg);
+    });
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  test("shows did-you-mean suggestion for close command typo", async () => {
+    const result = await runCommand({
+      command: "claud",
+      args: [],
+      positionals: [],
+      positionalMappings: new Map(),
+      captureOutput: false,
+    });
+
+    expect(result.exitCode).toBe(127);
+    expect(capturedErrors.some((line) => line.includes("Did you mean 'claude'?"))).toBe(true);
+  });
+});
+
+describe("flow metadata keys are never CLI flags (v3)", () => {
+  test("description and route are consumed, real flags still pass", () => {
+    const args = buildArgs(
+      { description: "review staged changes", route: "review|diff", model: "gpt-5.5" } as AgentFrontmatter,
+      new Set(),
+      "codex"
+    );
+    expect(args).not.toContain("--description");
+    expect(args).not.toContain("--route");
+    expect(args).toContain("--model");
   });
 });

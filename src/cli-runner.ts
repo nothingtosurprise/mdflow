@@ -8,7 +8,7 @@
 
 import { parseFrontmatter } from "./parse";
 import { parseCliArgs, handleMaCommands } from "./cli";
-import type { AgentFrontmatter, FormInputs } from "./types";
+import type { AgentFrontmatter, FormInputs, StructuredOutputConfig } from "./types";
 import { detectAdhocCommand, createVirtualAgentContent, createVirtualFilename } from "./adhoc-command";
 import {
   isFormInputs,
@@ -20,9 +20,10 @@ import {
 import { substituteTemplateVars, extractTemplateVars } from "./template";
 import { isRemoteUrl, fetchRemote, cleanupRemote } from "./remote";
 import {
-  resolveCommand, buildArgs, runCommand, extractPositionalMappings,
+  resolveEngine, type EngineSource, buildArgs, runCommand, extractPositionalMappings,
   extractEnvVars, killCurrentChildProcess, hasInteractiveMarker,
 } from "./command";
+import { parseWorkflow, executeWorkflow, type WorkflowResult } from "./workflow";
 import { startSpinner } from "./spinner";
 import { getProcessManager } from "./process-manager";
 import {
@@ -35,14 +36,14 @@ import {
 } from "./context-dashboard";
 import { loadEnvFiles } from "./env";
 import {
-  loadGlobalConfig, getCommandDefaults, applyDefaults, applyInteractiveMode,
+  loadGlobalConfig, loadFullConfig, getCommandDefaults, applyDefaults, applyInteractiveMode,
 } from "./config";
 import {
   initLogger, getParseLogger, getTemplateLogger, getCommandLogger,
   getImportLogger, getCurrentLogPath,
 } from "./logger";
 import { isDomainTrusted, promptForTrust, addTrustedDomain, extractDomain } from "./trust";
-import { dirname, resolve, join, delimiter, sep } from "path";
+import { basename, dirname, resolve, join, delimiter, sep } from "path";
 import { homedir } from "os";
 // Lazy-load heavy dependencies for cold start optimization
 import { exceedsLimit, StdinSizeLimitError } from "./limits";
@@ -51,6 +52,7 @@ import {
   MarkdownAgentError, EarlyExitRequest, UserCancelledError, FileNotFoundError,
   NetworkError, SecurityError, ConfigurationError, TemplateError, ImportError,
 } from "./errors";
+import { recordRun, type RunRecord } from "./telemetry";
 import type { SystemEnvironment } from "./system-environment";
 import { editPrompt } from "./edit-prompt";
 import { maskArgsArray } from "./secrets";
@@ -94,11 +96,51 @@ async function getSaveVariableValuesFn() {
   return _saveVariableValues;
 }
 
+type StructuredOutputFormat = NonNullable<StructuredOutputConfig["format"]>;
+
+interface OutputModule {
+  extractStructured: (stdout: string, format?: StructuredOutputFormat) => unknown;
+  validateOutput?: (
+    schemaRef: string,
+    value: unknown,
+    options?: { baseDir?: string }
+  ) => Promise<unknown>;
+  validate?: (
+    schemaRef: string,
+    value: unknown,
+    options?: { baseDir?: string }
+  ) => Promise<unknown>;
+  sinkOutput?: (...args: unknown[]) => Promise<unknown> | unknown;
+  sinkSave?: (
+    targetPath: string,
+    value: unknown,
+    format: StructuredOutputFormat,
+    options?: { cwd?: string }
+  ) => Promise<string>;
+  sinkApplyPatch?: (patchText: string, options?: { cwd?: string }) => void;
+}
+
 /** Result from CliRunner.run() */
 export interface CliRunResult {
   exitCode: number;
   errorMessage?: string;
   logPath?: string | null;
+}
+
+interface JsonModePayload {
+  exitCode: number;
+  command: string;
+  args: string[];
+  stdout: string;
+  stderr: string;
+}
+
+interface JsonModeState {
+  command: string;
+  args: string[];
+  stdout: string;
+  stderr: string;
+  hasCommandResult: boolean;
 }
 
 /** Options for CliRunner */
@@ -124,6 +166,7 @@ export class CliRunner {
   private stdinContent: string | undefined;
   private promptInput: (message: string) => Promise<string>;
   private promptInputWithHistory: (message: string, defaultValue?: string) => Promise<string>;
+  private jsonModeState: JsonModeState | null = null;
 
   constructor(options: CliRunnerOptions) {
     this.env = options.env;
@@ -210,13 +253,229 @@ export class CliRunner {
     return filePath;
   }
 
-  async run(argv: string[]): Promise<CliRunResult> {
-    let logPath: string | null = null;
-    try {
-      return await this.runInternal(argv, (lp) => { logPath = lp; });
-    } catch (err) {
-      return this.handleError(err, logPath);
+  private parseRegistryArgs(args: string[]): { scope?: "project" | "user"; positional: string[] } {
+    let scope: "project" | "user" | undefined;
+    const positional: string[] = [];
+
+    for (const arg of args) {
+      if (arg === "--project" || arg === "-p") {
+        scope = "project";
+        continue;
+      }
+      if (arg === "--global" || arg === "-g" || arg === "--user") {
+        scope = "user";
+        continue;
+      }
+      positional.push(arg);
     }
+
+    return { scope, positional };
+  }
+
+  private resetJsonModeState(): void {
+    this.jsonModeState = {
+      command: "",
+      args: [],
+      stdout: "",
+      stderr: "",
+      hasCommandResult: false,
+    };
+  }
+
+  private formatConsoleArgs(args: unknown[]): string {
+    return args.map((arg) => {
+      if (typeof arg === "string") return arg;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }).join(" ");
+  }
+
+  private buildSpawnArgs(
+    args: string[],
+    positionals: string[],
+    positionalMappings: Map<number, string>
+  ): string[] {
+    const finalArgs = [...args];
+    for (let i = 0; i < positionals.length; i++) {
+      const pos = i + 1;
+      const value = positionals[i];
+      if (value === undefined) continue;
+      if (positionalMappings.has(pos)) {
+        const flag = positionalMappings.get(pos)!;
+        finalArgs.push(flag.length === 1 ? `-${flag}` : `--${flag}`, value);
+      } else {
+        finalArgs.push(value);
+      }
+    }
+    return finalArgs;
+  }
+
+  private recordJsonCommand(command: string, args: string[]): void {
+    if (!this.jsonModeState) return;
+    this.jsonModeState.command = command;
+    this.jsonModeState.args = [...args];
+  }
+
+  private recordJsonResult(stdout: string, stderr: string): void {
+    if (!this.jsonModeState) return;
+    this.jsonModeState.stdout = stdout;
+    this.jsonModeState.stderr = stderr;
+    this.jsonModeState.hasCommandResult = true;
+  }
+
+  private buildJsonModePayload(
+    result: CliRunResult,
+    capturedStdout: string[],
+    capturedStderr: string[]
+  ): JsonModePayload {
+    const state = this.jsonModeState;
+    const joinedStdout = capturedStdout.join("\n");
+    const joinedStderr = capturedStderr.join("\n");
+    const hasCommandResult = state?.hasCommandResult ?? false;
+
+    const stdout = hasCommandResult ? (state?.stdout ?? "") : joinedStdout;
+
+    let stderr = hasCommandResult ? (state?.stderr ?? "") : joinedStderr;
+    if (hasCommandResult && joinedStderr.trim().length > 0) {
+      stderr = [stderr, joinedStderr].filter(Boolean).join("\n");
+    }
+    if (!stderr && result.errorMessage) stderr = result.errorMessage;
+
+    return {
+      exitCode: result.exitCode,
+      command: state?.command ?? "",
+      args: state?.args ?? [],
+      stdout,
+      stderr,
+    };
+  }
+
+  private async executeCommand(
+    ctx: Parameters<typeof runCommand>[0],
+    jsonMode: boolean
+  ): Promise<Awaited<ReturnType<typeof runCommand>>> {
+    if (!jsonMode) return runCommand(ctx);
+
+    const spawnArgs = this.buildSpawnArgs(ctx.args, ctx.positionals, ctx.positionalMappings);
+    this.recordJsonCommand(ctx.command, spawnArgs);
+
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = () => {};
+    console.error = () => {};
+
+    try {
+      const result = await runCommand(ctx);
+      this.recordJsonResult(result.stdout, result.stderr);
+      return result;
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+  }
+
+  private calculateOutputBytes(stdout: string, stderr: string): number {
+    return Buffer.byteLength(stdout, "utf-8") + Buffer.byteLength(stderr, "utf-8");
+  }
+
+  private calculateWorkflowOutputBytes(workflowResult: WorkflowResult): number {
+    let totalOutputBytes = 0;
+    for (const stepId of workflowResult.stepOrder) {
+      const step = workflowResult.steps[stepId];
+      if (!step) continue;
+      totalOutputBytes += this.calculateOutputBytes(step.stdout, step.stderr);
+    }
+    return totalOutputBytes;
+  }
+
+  private async recordRunTelemetry(params: {
+    agentPath: string;
+    tool: string;
+    durationMs: number;
+    exitCode: number;
+    outputBytes: number;
+    currentState: "adhoc_command_completed" | "workflow_completed" | "command_completed";
+  }): Promise<void> {
+    const runRecord: RunRecord = {
+      agentPath: params.agentPath,
+      tool: params.tool,
+      durationMs: params.durationMs,
+      exitCode: params.exitCode,
+      outputBytes: params.outputBytes,
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      await recordRun(runRecord);
+      getCommandLogger().debug(
+        {
+          currentState: params.currentState,
+          agentPath: runRecord.agentPath,
+          tool: runRecord.tool,
+          durationMs: runRecord.durationMs,
+          exitCode: runRecord.exitCode,
+          outputBytes: runRecord.outputBytes,
+        },
+        "Run telemetry recorded"
+      );
+    } catch (err) {
+      const failureMessage = err instanceof Error ? err.message : String(err);
+      getCommandLogger().error(
+        {
+          attempted: "recordRun",
+          failed: failureMessage,
+          currentState: params.currentState,
+          runRecord,
+        },
+        "Run telemetry recording failed"
+      );
+    }
+  }
+
+  async run(argv: string[]): Promise<CliRunResult> {
+    const jsonMode = argv.includes("--json");
+    let logPath: string | null = null;
+    if (!jsonMode) {
+      try {
+        return await this.runInternal(argv, (lp) => { logPath = lp; });
+      } catch (err) {
+        return this.handleError(err, logPath);
+      }
+    }
+
+    this.resetJsonModeState();
+
+    const capturedStdout: string[] = [];
+    const capturedStderr: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+
+    console.log = (...args: unknown[]) => {
+      capturedStdout.push(this.formatConsoleArgs(args));
+    };
+    console.error = (...args: unknown[]) => {
+      capturedStderr.push(this.formatConsoleArgs(args));
+    };
+
+    let result: CliRunResult = { exitCode: 1 };
+    try {
+      try {
+        result = await this.runInternal(argv, (lp) => { logPath = lp; });
+      } catch (err) {
+        result = this.handleError(err, logPath);
+      }
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+
+    const payload = this.buildJsonModePayload(result, capturedStdout, capturedStderr);
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+    this.jsonModeState = null;
+    return result;
   }
 
   private handleError(err: unknown, logPath: string | null): CliRunResult {
@@ -243,6 +502,8 @@ export class CliRunner {
 
     const cliArgs = parseCliArgs(argv);
     const subcommand = cliArgs.filePath;
+    const jsonModeRequested = cliArgs.passthroughArgs.includes("--json");
+    const registryArgs = this.parseRegistryArgs(cliArgs.passthroughArgs);
 
     // Handle subcommands
     if (subcommand === "create") {
@@ -267,16 +528,81 @@ export class CliRunner {
       }
       return { exitCode: 0 };
     }
+    if (subcommand === "install") {
+      const { installAgent } = await import("./registry");
+      const spec = registryArgs.positional[0];
+      if (!spec) {
+        throw new ConfigurationError("Usage: md install <url|gh:org/repo/path/to/agent.md@ref>", 1);
+      }
+
+      const installed = await installAgent(spec, { scope: registryArgs.scope, cwd: this.cwd });
+      this.writeStdout(`Installed: ${installed.name}`);
+      this.writeStdout(`  Source: ${installed.source}`);
+      if (installed.resolvedRef) {
+        this.writeStdout(`  Resolved ref: ${installed.resolvedRef}`);
+      }
+      this.writeStdout(`  Scope: ${installed.scope}`);
+      this.writeStdout(`  Path: ${installed.installedPath}`);
+      this.writeStdout(`  SHA-256: ${installed.sha256}`);
+      return { exitCode: 0 };
+    }
+    if (subcommand === "remove") {
+      const { removeAgent } = await import("./registry");
+      const name = registryArgs.positional[0];
+      if (!name) {
+        throw new ConfigurationError("Usage: md remove <agent-name>", 1);
+      }
+
+      const removed = await removeAgent(name, { scope: registryArgs.scope, cwd: this.cwd });
+      if (!removed.removed) {
+        throw new ConfigurationError(`Registry agent not found: ${name}`, 1);
+      }
+
+      this.writeStdout(`Removed: ${removed.name} (${removed.removedFrom.join(", ")})`);
+      return { exitCode: 0 };
+    }
+    if (subcommand === "list") {
+      const { listAgents } = await import("./registry");
+      const agents = await listAgents({ scope: registryArgs.scope, cwd: this.cwd });
+      if (agents.length === 0) {
+        this.writeStdout("No registry agents installed.");
+        return { exitCode: 0 };
+      }
+
+      this.writeStdout("Registry agents:");
+      for (const agent of agents) {
+        this.writeStdout(`  ${agent.name} [${agent.scope}]`);
+        this.writeStdout(`    source: ${agent.source}`);
+        if (agent.resolvedRef) {
+          this.writeStdout(`    resolvedRef: ${agent.resolvedRef}`);
+        }
+        this.writeStdout(`    sha256: ${agent.sha256}`);
+        this.writeStdout(`    path: ${agent.installedPath}`);
+        this.writeStdout(`    installedAt: ${agent.installedAt}`);
+      }
+      return { exitCode: 0 };
+    }
     if (subcommand === "explain") {
       const { runExplain } = await import("./explain");
       await runExplain(cliArgs.passthroughArgs);
       return { exitCode: 0 };
+    }
+    if (subcommand === "eval") {
+      const { runEvalCli } = await import("./evals");
+      return { exitCode: await runEvalCli(cliArgs.passthroughArgs) };
     }
     if (subcommand === "help") cliArgs.help = true;
 
     let filePath = cliArgs.filePath;
     let passthroughArgs = cliArgs.passthroughArgs;
     if (!filePath || subcommand === "help") {
+      if (jsonModeRequested && !filePath && subcommand !== "help") {
+        this.writeStderr("Usage: md <file.md> [flags for command]");
+        this.writeStderr("       md <command> [options]");
+        this.writeStderr("\nCommands: create, setup, logs, explain, eval, install, remove, list, help");
+        this.writeStderr("Run 'md help' for more info");
+        throw new ConfigurationError("No agent file specified", 1);
+      }
       const result = await handleMaCommands(cliArgs);
       if (result.selectedFile) {
         filePath = result.selectedFile;
@@ -287,7 +613,7 @@ export class CliRunner {
       } else if (!result.handled) {
         this.writeStderr("Usage: md <file.md> [flags for command]");
         this.writeStderr("       md <command> [options]");
-        this.writeStderr("\nCommands: create, setup, logs, help");
+        this.writeStderr("\nCommands: create, setup, logs, explain, eval, install, remove, list, help");
         this.writeStderr("Run 'md help' for more info");
         throw new ConfigurationError("No agent file specified", 1);
       }
@@ -370,8 +696,22 @@ export class CliRunner {
     }
 
     // Edit before execute
+    // Hard prompt budget: _max_prompt_tokens blocks execution BEFORE any
+    // engine turn is spent when the fully resolved prompt exceeds the limit.
+    const maxPromptTokens = frontmatter._max_prompt_tokens;
+    if (typeof maxPromptTokens === "number" && maxPromptTokens > 0) {
+      const promptTokens = await countTokensAsync(finalBody);
+      if (promptTokens > maxPromptTokens) {
+        throw new MarkdownAgentError(
+          `Prompt is ~${promptTokens.toLocaleString()} tokens, over the _max_prompt_tokens limit of ${maxPromptTokens.toLocaleString()}. ` +
+            `Narrow the imports, raise the limit, or inspect with --_context.`,
+          { errorCode: "PROMPT_TOKEN_LIMIT", exitCode: 1 }
+        );
+      }
+    }
+
     let promptToRun = finalBody;
-    if (parsed.editFlag) {
+    if (parsed.editFlag && !parsed.jsonMode) {
       const editResult = await editPrompt(finalBody);
       if (!editResult.confirmed || editResult.prompt === null) {
         logger.info({ editCancelled: true }, "Edit cancelled by user");
@@ -391,28 +731,58 @@ export class CliRunner {
     getCommandLogger().info({ command, argsCount: finalRunArgs.length, promptLength: promptToRun.length, adhoc: true }, "Executing ad-hoc command");
 
     // Start spinner with command preview
-    const preview = formatCommandPreview(command, finalRunArgs);
-    startSpinner(preview);
+    if (!parsed.jsonMode) {
+      const preview = formatCommandPreview(command, finalRunArgs);
+      startSpinner(preview);
+    }
 
     // Determine if we should capture output for post-run menu
     // Disable when piping (stdout not TTY) to support: foo.md | bar.md
-    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu;
-    const captureMode = shouldShowMenu ? "tee" as const : false;
+    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
+    const structuredOutputConfig = this.getStructuredOutputConfig(frontmatter);
+    const captureMode = parsed.jsonMode
+      ? "capture" as const
+      : shouldShowMenu
+        ? "tee" as const
+        : (structuredOutputConfig ? "capture" as const : false);
 
-    const runResult = await runCommand({
+    const commandStartedAt = Date.now();
+    const runResult = await this.executeCommand({
       command,
       args: finalRunArgs,
       positionals: [promptToRun],
       positionalMappings,
       captureOutput: captureMode,
+      captureStderr: parsed.jsonMode || shouldShowMenu,
       env: extractEnvVars(frontmatter),
       rawOutput: parsed.rawOutput,
+    }, parsed.jsonMode);
+    const commandDurationMs = Date.now() - commandStartedAt;
+
+    await this.recordRunTelemetry({
+      agentPath: virtualFilename,
+      tool: command,
+      durationMs: commandDurationMs,
+      exitCode: runResult.exitCode,
+      outputBytes: this.calculateOutputBytes(runResult.stdout, runResult.stderr),
+      currentState: "adhoc_command_completed",
     });
 
     getCommandLogger().info({ exitCode: runResult.exitCode, adhoc: true }, "Ad-hoc command completed");
 
     if (runResult.exitCode !== 0) {
       this.printErrorWithLogPath(`Agent exited with code ${runResult.exitCode}`, logPath);
+    }
+
+    if (runResult.exitCode === 0 && structuredOutputConfig) {
+      const structuredOutputCwd = parsed.cwdFromCli ?? (frontmatter._cwd as string | undefined) ?? this.cwd;
+      await this.processStructuredOutput({
+        stdout: runResult.stdout,
+        output: structuredOutputConfig,
+        baseDir: this.cwd,
+        sinkCwd: structuredOutputCwd,
+        source: virtualFilename,
+      });
     }
 
     // Show post-run action menu if enabled and we have output
@@ -510,14 +880,138 @@ export class CliRunner {
       printDashboard(analysis);
     }
 
+    const workflowSteps = frontmatter._steps;
+    if (workflowSteps !== undefined) {
+      const workflow = parseWorkflow(workflowSteps);
+
+      let workflowRunArgs = args;
+      if (frontmatter._subcommand) {
+        const subcommands = Array.isArray(frontmatter._subcommand)
+          ? frontmatter._subcommand
+          : [frontmatter._subcommand];
+        workflowRunArgs = [...subcommands, ...args];
+      }
+
+      const workflowTemplateVars = Object.fromEntries(
+        Object.entries(templateVars).filter(([key]) => !key.startsWith("__"))
+      );
+
+      if (parsed.dryRun) {
+        return this.handleWorkflowDryRun(
+          command,
+          workflowRunArgs,
+          workflow,
+          logger,
+          isRemote,
+          localFilePath
+        );
+      }
+
+      if (isRemote && !parsed.trustFlag) {
+        await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody, parsed.jsonMode);
+      }
+
+      const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
+      const captureMode = parsed.jsonMode
+        ? "capture" as const
+        : this.isStdoutTTY
+          ? "tee" as const
+          : "capture" as const;
+      const cacheBaseDir = parsed.cwdFromCli ?? (frontmatter._cwd as string | undefined) ?? this.cwd;
+      if (parsed.jsonMode) {
+        this.recordJsonCommand(command, workflowRunArgs);
+      }
+
+      const workflowStartedAt = Date.now();
+      const workflowResult = await executeWorkflow({
+        workflow,
+        defaultTool: command,
+        args: workflowRunArgs,
+        positionalMappings,
+        templateVars: workflowTemplateVars,
+        env: extractEnvVars(frontmatter),
+        rawOutput: parsed.rawOutput,
+        captureOutput: captureMode,
+        resume: parsed.resume,
+        cacheDir: join(cacheBaseDir, ".mdflow", ".cache"),
+        runCommandFn: (ctx) => this.executeCommand(ctx, parsed.jsonMode),
+      });
+      const workflowDurationMs = Date.now() - workflowStartedAt;
+
+      await this.recordRunTelemetry({
+        agentPath: localFilePath,
+        tool: command,
+        durationMs: workflowDurationMs,
+        exitCode: workflowResult.exitCode,
+        outputBytes: this.calculateWorkflowOutputBytes(workflowResult),
+        currentState: "workflow_completed",
+      });
+
+      if (workflowResult.exitCode === 0) {
+        getRecordUsage().then(recordUsage => recordUsage(localFilePath)).catch(() => {}); // Fire and forget
+
+        const promptedVars = (templateVars as Record<string, unknown>)["__promptedVars__"] as Record<string, string> | undefined;
+        const noHistoryFlag = (templateVars as Record<string, unknown>)["__noHistory__"] as boolean | undefined;
+        const resolvedPath = (templateVars as Record<string, unknown>)["__resolvedFilePath__"] as string | undefined;
+
+        if (promptedVars && Object.keys(promptedVars).length > 0 && !noHistoryFlag && resolvedPath) {
+          getSaveVariableValuesFn()
+            .then(saveVars => saveVars(resolvedPath, promptedVars))
+            .catch(() => {}); // Fire and forget
+        }
+      }
+
+      if (isRemote) await cleanupRemote(localFilePath);
+
+      if (workflowResult.exitCode !== 0) {
+        this.printErrorWithLogPath(`Agent exited with code ${workflowResult.exitCode}`, logPath);
+      }
+
+      if (shouldShowMenu && workflowResult.exitCode === 0) {
+        const lastWorkflowOutput = getLastWorkflowOutput(workflowResult);
+        if (lastWorkflowOutput) {
+          try {
+            const { showPostRunMenu, executePostRunAction } = await import("./post-run-menu");
+            const menuResult = await showPostRunMenu(lastWorkflowOutput);
+            if (menuResult && menuResult.action !== "exit") {
+              await executePostRunAction(menuResult, lastWorkflowOutput);
+            }
+          } catch {
+            // Menu cancelled or failed, just continue
+          }
+        }
+      }
+
+      logger.info({
+        exitCode: workflowResult.exitCode,
+        workflowSteps: workflowResult.stepOrder.length,
+        resume: parsed.resume,
+      }, "Workflow session ended");
+      return { exitCode: workflowResult.exitCode, logPath };
+    }
+
     // Dry run
     if (parsed.dryRun) {
       return this.handleDryRun(command, frontmatter, args, [finalBody], positionalMappings, logger, isRemote, localFilePath, logPath);
     }
 
     // Edit before execute
+    // Hard prompt budget: _max_prompt_tokens blocks execution BEFORE any
+    // engine turn is spent when the fully resolved prompt exceeds the limit.
+    const maxPromptTokens = frontmatter._max_prompt_tokens;
+    if (typeof maxPromptTokens === "number" && maxPromptTokens > 0) {
+      const promptTokens = await countTokensAsync(finalBody);
+      if (promptTokens > maxPromptTokens) {
+        throw new MarkdownAgentError(
+          `Prompt is ~${promptTokens.toLocaleString()} tokens, over the _max_prompt_tokens limit of ${maxPromptTokens.toLocaleString()}. ` +
+            `Narrow the imports, raise the limit, or inspect with --_context.`,
+          { errorCode: "PROMPT_TOKEN_LIMIT", exitCode: 1 }
+        );
+      }
+    }
+
     let promptToRun = finalBody;
-    if (parsed.editFlag) {
+    if (parsed.editFlag && !parsed.jsonMode) {
       const editResult = await editPrompt(finalBody);
       if (!editResult.confirmed || editResult.prompt === null) {
         if (isRemote) await cleanupRemote(localFilePath);
@@ -530,7 +1024,7 @@ export class CliRunner {
 
     // TOFU check
     if (isRemote && !parsed.trustFlag) {
-      await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody);
+      await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody, parsed.jsonMode);
     }
 
     // Execute
@@ -543,32 +1037,40 @@ export class CliRunner {
     // Determine if we should capture output for post-run menu
     // Only capture when: TTY (stdin+stdout), not piped, menu not disabled
     // Checking stdout.isTTY enables piping: foo.md | bar.md
-    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu;
+    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
+    const structuredOutputConfig = this.getStructuredOutputConfig(frontmatter);
     // Always capture stderr when in interactive mode for failure menu
-    const captureMode = shouldShowMenu ? "tee" as const : false;
+    const captureMode = parsed.jsonMode
+      ? "capture" as const
+      : shouldShowMenu
+        ? "tee" as const
+        : (structuredOutputConfig ? "capture" as const : false);
 
     // Auto-heal retry loop
     let currentPrompt = promptToRun;
     let runResult: Awaited<ReturnType<typeof runCommand>>;
     let retryCount = 0;
 
+    const commandStartedAt = Date.now();
     while (true) {
       getCommandLogger().info({ command, argsCount: finalRunArgs.length, promptLength: currentPrompt.length, retryCount }, "Executing command");
 
       // Start spinner with command preview (will be stopped when first output arrives)
-      const preview = formatCommandPreview(command, finalRunArgs);
-      startSpinner(preview);
+      if (!parsed.jsonMode) {
+        const preview = formatCommandPreview(command, finalRunArgs);
+        startSpinner(preview);
+      }
 
-      runResult = await runCommand({
+      runResult = await this.executeCommand({
         command,
         args: finalRunArgs,
         positionals: [currentPrompt],
         positionalMappings,
         captureOutput: captureMode,
-        captureStderr: shouldShowMenu, // Capture stderr for failure menu
+        captureStderr: shouldShowMenu || parsed.jsonMode, // Capture stderr for failure menu/json output
         env: extractEnvVars(frontmatter),
         rawOutput: parsed.rawOutput,
-      });
+      }, parsed.jsonMode);
 
       getCommandLogger().info({ exitCode: runResult.exitCode, retryCount }, "Command completed");
 
@@ -611,9 +1113,30 @@ export class CliRunner {
         break;
       }
     }
+    const commandDurationMs = Date.now() - commandStartedAt;
+
+    await this.recordRunTelemetry({
+      agentPath: localFilePath,
+      tool: command,
+      durationMs: commandDurationMs,
+      exitCode: runResult.exitCode,
+      outputBytes: this.calculateOutputBytes(runResult.stdout, runResult.stderr),
+      currentState: "command_completed",
+    });
 
     // Record usage for frecency tracking (skip for failed runs, lazy-load history)
     if (runResult.exitCode === 0) {
+      if (structuredOutputConfig) {
+        const structuredOutputCwd = parsed.cwdFromCli ?? (frontmatter._cwd as string | undefined) ?? this.cwd;
+        await this.processStructuredOutput({
+          stdout: runResult.stdout,
+          output: structuredOutputConfig,
+          baseDir: dirname(resolve(localFilePath)),
+          sinkCwd: structuredOutputCwd,
+          source: localFilePath,
+        });
+      }
+
       getRecordUsage().then(recordUsage => recordUsage(localFilePath)).catch(() => {}); // Fire and forget
 
       // Save prompted variable values to history for future runs (fire and forget)
@@ -651,17 +1174,169 @@ export class CliRunner {
     return { exitCode: runResult.exitCode, logPath };
   }
 
+  private getStructuredOutputConfig(frontmatter: AgentFrontmatter): StructuredOutputConfig | undefined {
+    if (!Object.prototype.hasOwnProperty.call(frontmatter, "_output")) {
+      return undefined;
+    }
+
+    const output = frontmatter._output;
+    if (output === undefined || output === null) {
+      return undefined;
+    }
+
+    if (typeof output !== "object" || Array.isArray(output)) {
+      throw new ConfigurationError("_output must be a mapping/object when provided", 1);
+    }
+
+    return output;
+  }
+
+  private resolveStructuredOutputFormat(output: StructuredOutputConfig): StructuredOutputFormat {
+    return output.format ?? (output.apply ? "patch" : "text");
+  }
+
+  private unwrapValidationResult(result: unknown): unknown {
+    if (!result || typeof result !== "object" || !("success" in result)) {
+      return result;
+    }
+
+    const validationResult = result as {
+      success?: unknown;
+      data?: unknown;
+      error?: unknown;
+    };
+
+    if (validationResult.success === true) {
+      return validationResult.data;
+    }
+
+    if (validationResult.success === false) {
+      const message = typeof validationResult.error === "string"
+        ? validationResult.error
+        : "Schema validation failed.";
+      throw new Error(message);
+    }
+
+    return result;
+  }
+
+  private serializeStructuredForSink(value: unknown, format: StructuredOutputFormat): string {
+    if (typeof value === "string") {
+      return value;
+    }
+
+    if (format === "json") {
+      return `${JSON.stringify(value, null, 2)}\n`;
+    }
+
+    return JSON.stringify(value);
+  }
+
+  private async processStructuredOutput(params: {
+    stdout: string;
+    output: StructuredOutputConfig;
+    baseDir: string;
+    sinkCwd: string;
+    source: string;
+  }): Promise<void> {
+    const { stdout, output, baseDir, sinkCwd, source } = params;
+    const format = this.resolveStructuredOutputFormat(output);
+
+    try {
+      getCommandLogger().info(
+        {
+          source,
+          format,
+          hasSchema: Boolean(output.schema),
+          save: output.save ?? null,
+          apply: Boolean(output.apply),
+          sinkCwd,
+        },
+        "Processing structured output"
+      );
+
+      const outputModule = await import("./output") as OutputModule;
+      let structured = outputModule.extractStructured(stdout, format);
+
+      if (output.schema) {
+        if (outputModule.validateOutput) {
+          const validationResult = await outputModule.validateOutput(output.schema, structured, { baseDir });
+          structured = this.unwrapValidationResult(validationResult);
+        } else if (outputModule.validate) {
+          structured = await outputModule.validate(output.schema, structured, { baseDir });
+        } else {
+          throw new Error("validateOutput() is unavailable in src/output.ts");
+        }
+      }
+
+      if (output.save || output.apply) {
+        if (outputModule.sinkOutput) {
+          if (outputModule.sinkOutput.length >= 3) {
+            await outputModule.sinkOutput(structured, output, { cwd: sinkCwd, format });
+          } else {
+            const sinkContent = this.serializeStructuredForSink(structured, format);
+            await outputModule.sinkOutput(
+              { save: output.save, apply: output.apply, cwd: sinkCwd },
+              sinkContent
+            );
+          }
+        } else {
+          if (output.save) {
+            if (!outputModule.sinkSave) {
+              throw new Error("sinkOutput() and sinkSave() are unavailable in src/output.ts");
+            }
+            await outputModule.sinkSave(output.save, structured, format, { cwd: sinkCwd });
+          }
+
+          if (output.apply) {
+            if (format !== "patch") {
+              throw new Error("Output apply=true requires format=patch.");
+            }
+            if (typeof structured !== "string") {
+              throw new Error("Patch output must be string data.");
+            }
+            if (!outputModule.sinkApplyPatch) {
+              throw new Error("sinkOutput() and sinkApplyPatch() are unavailable in src/output.ts");
+            }
+            outputModule.sinkApplyPatch(structured, { cwd: sinkCwd });
+          }
+        }
+      }
+
+      getCommandLogger().info({ source, format }, "Structured output processed");
+    } catch (err) {
+      const details = err instanceof Error ? err.message : String(err);
+      getCommandLogger().error(
+        { source, format, error: details, outputConfig: output },
+        "Structured output processing failed"
+      );
+      throw new ConfigurationError(`Structured output processing failed: ${details}`, 1);
+    }
+  }
+
   private parseFlags(passthroughArgs: string[]) {
     let remainingArgs = [...passthroughArgs];
     let commandFromCli: string | undefined;
     let dryRun = false, trustFlag = false, interactiveFromCli = false, noCache = false, rawOutput = false, editFlag = false;
-    let contextOnly = false, quiet = false, noMenu = false, noHistory = false;
+    let contextOnly = false, quiet = false, noMenu = false, noHistory = false, resume = false;
+    let jsonMode = false;
     let cwdFromCli: string | undefined;
 
+    // --engine is the v3 flag; --_command/-_c and --tool are deprecated aliases.
+    const engineIdx = remainingArgs.findIndex((a) => a === "--engine");
+    if (engineIdx !== -1 && engineIdx + 1 < remainingArgs.length) {
+      commandFromCli = remainingArgs[engineIdx + 1];
+      remainingArgs.splice(engineIdx, 2);
+    }
     const cmdIdx = remainingArgs.findIndex((a) => a === "--_command" || a === "-_c");
     if (cmdIdx !== -1 && cmdIdx + 1 < remainingArgs.length) {
-      commandFromCli = remainingArgs[cmdIdx + 1];
+      if (!commandFromCli) commandFromCli = remainingArgs[cmdIdx + 1];
       remainingArgs.splice(cmdIdx, 2);
+    }
+    const toolIdx = remainingArgs.findIndex((a) => a === "--tool");
+    if (toolIdx !== -1 && toolIdx + 1 < remainingArgs.length) {
+      if (!commandFromCli) commandFromCli = remainingArgs[toolIdx + 1];
+      remainingArgs.splice(toolIdx, 2);
     }
     const dryIdx = remainingArgs.indexOf("--_dry-run");
     if (dryIdx !== -1) { dryRun = true; remainingArgs.splice(dryIdx, 1); }
@@ -673,9 +1348,13 @@ export class CliRunner {
     if (noCacheIdx !== -1) { noCache = true; remainingArgs.splice(noCacheIdx, 1); }
     const noMenuIdx = remainingArgs.indexOf("--_no-menu");
     if (noMenuIdx !== -1) { noMenu = true; remainingArgs.splice(noMenuIdx, 1); }
+    const jsonIdx = remainingArgs.indexOf("--json");
+    if (jsonIdx !== -1) { jsonMode = true; remainingArgs.splice(jsonIdx, 1); }
     // --_no-history flag: skip loading/saving variable history
     const noHistoryIdx = remainingArgs.indexOf("--_no-history");
     if (noHistoryIdx !== -1) { noHistory = true; remainingArgs.splice(noHistoryIdx, 1); }
+    const resumeIdx = remainingArgs.indexOf("--_resume");
+    if (resumeIdx !== -1) { resume = true; remainingArgs.splice(resumeIdx, 1); }
     const intIdx = remainingArgs.findIndex((a) => a === "--_interactive" || a === "-_i");
     if (intIdx !== -1) { interactiveFromCli = true; remainingArgs.splice(intIdx, 1); }
     const cwdIdx = remainingArgs.findIndex((a) => a === "--_cwd");
@@ -692,7 +1371,7 @@ export class CliRunner {
     const quietIdx = remainingArgs.indexOf("--_quiet");
     if (quietIdx !== -1) { quiet = true; remainingArgs.splice(quietIdx, 1); }
 
-    return { remainingArgs, commandFromCli, dryRun, editFlag, trustFlag, interactiveFromCli, cwdFromCli, noCache, rawOutput, contextOnly, quiet, noMenu, noHistory };
+    return { remainingArgs, commandFromCli, dryRun, editFlag, trustFlag, interactiveFromCli, cwdFromCli, noCache, rawOutput, contextOnly, quiet, noMenu, noHistory, resume, jsonMode };
   }
 
   private async processAgent(
@@ -702,17 +1381,52 @@ export class CliRunner {
     stdinContent: string,
     parsed: ReturnType<typeof this.parseFlags>
   ) {
-    const { remainingArgs, commandFromCli, interactiveFromCli, cwdFromCli, noHistory } = parsed;
+    const { remainingArgs, commandFromCli, interactiveFromCli, cwdFromCli, noHistory, jsonMode } = parsed;
     let remaining = [...remainingArgs];
 
-    // Resolve command
+    // Resolve the engine via the v3 ladder: CLI flag > env > filename >
+    // frontmatter > config > built-in default.
     let command: string;
+    let engineSource: EngineSource = "cli";
     if (commandFromCli) {
       command = commandFromCli;
-      getCommandLogger().debug({ command, source: "cli" }, "Command from --_command flag");
+      getCommandLogger().debug({ command, source: "cli" }, "Engine from --engine flag");
     } else {
-      command = resolveCommand(localFilePath);
-      getCommandLogger().debug({ command }, "Command resolved");
+      const fullConfig = await loadFullConfig(process.cwd());
+      const resolved = resolveEngine(localFilePath, baseFrontmatter as AgentFrontmatter, {
+        configEngine: fullConfig.engine,
+      });
+      command = resolved.engine;
+      engineSource = resolved.source;
+      getCommandLogger().debug({ command, source: engineSource }, "Engine resolved");
+      if (resolved.deprecatedKey) {
+        this.writeStderr(
+          `Warning [ENGINE_KEY_DEPRECATED]: frontmatter "${resolved.deprecatedKey}:" is deprecated; use "engine: ${command}".`
+        );
+      }
+      if (resolved.skippedFilenameEngine) {
+        this.writeStderr(
+          `Warning [ENGINE_NOT_FOUND]: filename names engine "${resolved.skippedFilenameEngine}" but no such adapter or binary exists — using ${command} (${engineSource}). Rename the file or install the engine if that was intended.`
+        );
+      }
+    }
+
+    const engineIsImplicit =
+      engineSource === "env" || engineSource === "config" || engineSource === "default";
+
+    // A markdown file with no frontmatter and no explicit engine is a
+    // document, not a flow — print it instead of executing it. Frontmatter
+    // (or a filename/flag engine) is what marks a file as executable.
+    if (engineIsImplicit && Object.keys(baseFrontmatter).length === 0) {
+      this.writeStdout(await this.env.fs.readText(localFilePath));
+      throw new EarlyExitRequest();
+    }
+
+    // Implicit resolution is allowed but never silent: say which engine won
+    // and which rung of the ladder chose it.
+    if (engineIsImplicit && !parsed.quiet && !jsonMode) {
+      const dim = process.stderr.isTTY ? ["\x1b[2m", "\x1b[0m"] : ["", ""];
+      this.writeStderr(`${dim[0]}${basename(localFilePath)} → ${command} (engine: ${engineSource})${dim[1]}`);
     }
 
     await loadGlobalConfig();
@@ -734,7 +1448,7 @@ export class CliRunner {
 
     // Extract _varname fields from frontmatter and match with --_varname CLI flags
     // Variables starting with _ are template variables (except internal keys)
-    const internalKeys = new Set(["_interactive", "_i", "_cwd", "_subcommand"]);
+    const internalKeys = new Set(["_interactive", "_i", "_cwd", "_subcommand", "_steps", "_output"]);
     const namedVarFields = Object.keys(frontmatter).filter((k) => k.startsWith("_") && !internalKeys.has(k));
     for (const key of namedVarFields) {
       const defaultValue = frontmatter[key];
@@ -847,7 +1561,7 @@ export class CliRunner {
       }
 
       // In interactive mode, collect missing form inputs via prompts
-      if (this.isStdinTTY) {
+      if (this.isStdinTTY && !jsonMode) {
         const collected = await collectFormInputs(formInputs, templateVars);
         Object.assign(templateVars, collected);
       } else {
@@ -876,7 +1590,7 @@ export class CliRunner {
     const promptedVars: Record<string, string> = {};
 
     if (missingVars.length > 0) {
-      if (this.isStdinTTY) {
+      if (this.isStdinTTY && !jsonMode) {
         this.writeStderr("Missing required variables. Please provide values:");
         for (const v of missingVars) {
           const previousValue = variableHistory[v];
@@ -916,16 +1630,10 @@ export class CliRunner {
       }
     }
 
-    // Cat file if no frontmatter
-    if (Object.keys(baseFrontmatter).length === 0 && !commandDefaults) {
-      try { resolveCommand(localFilePath); }
-      catch { this.writeStdout(await this.env.fs.readText(localFilePath)); throw new EarlyExitRequest(); }
-    }
-
     let finalBody = phase3Body;
 
     const templateVarSet = new Set(Object.keys(templateVars));
-    const args = [...buildArgs(frontmatter, templateVarSet), ...remaining];
+    const args = [...buildArgs(frontmatter, templateVarSet, command), ...remaining];
     const positionalMappings = extractPositionalMappings(frontmatter);
 
     return { command, frontmatter, templateVars, finalBody, args, positionalMappings };
@@ -973,15 +1681,44 @@ export class CliRunner {
     throw new EarlyExitRequest();
   }
 
+  private async handleWorkflowDryRun(
+    command: string,
+    args: string[],
+    workflow: ReturnType<typeof parseWorkflow>,
+    logger: ReturnType<typeof initLogger>,
+    isRemote: boolean,
+    localFilePath: string
+  ): Promise<CliRunResult> {
+    this.writeStdout("═══════════════════════════════════════════════════════════");
+    this.writeStdout("DRY RUN - Workflow will NOT be executed");
+    this.writeStdout("═══════════════════════════════════════════════════════════\n");
+    this.writeStdout("Default command:");
+    this.writeStdout(`   ${command} ${maskArgsArray(args).join(" ")}\n`);
+    this.writeStdout("Workflow steps:");
+
+    for (const batch of workflow.batches) {
+      for (const step of batch) {
+        const tool = step.tool ?? command;
+        const needs = step.needs && step.needs.length > 0 ? ` needs=[${step.needs.join(", ")}]` : "";
+        this.writeStdout(`  - ${step.id} (tool=${tool}${needs})`);
+        this.writeStdout(`    run: ${step.run}`);
+      }
+    }
+
+    if (isRemote) await cleanupRemote(localFilePath);
+    logger.info({ dryRun: true, workflow: true, steps: workflow.steps.length }, "Workflow dry run completed");
+    throw new EarlyExitRequest();
+  }
+
   private async handleTOFU(
     filePath: string, localFilePath: string, command: string,
-    baseFrontmatter: Record<string, unknown>, rawBody: string
+    baseFrontmatter: Record<string, unknown>, rawBody: string, jsonMode: boolean
   ): Promise<void> {
     const domain = extractDomain(filePath);
     const trusted = await isDomainTrusted(filePath);
 
     if (!trusted) {
-      if (!this.isStdinTTY) {
+      if (!this.isStdinTTY || jsonMode) {
         await cleanupRemote(localFilePath);
         throw new SecurityError(`Untrusted remote domain: ${domain}. Use --_trust flag to bypass this check in non-interactive mode, or run interactively to add the domain to known_hosts.`);
       }
@@ -999,6 +1736,17 @@ export class CliRunner {
       getCommandLogger().debug({ domain }, "Domain already trusted");
     }
   }
+}
+
+function getLastWorkflowOutput(result: WorkflowResult): string | undefined {
+  for (let i = result.stepOrder.length - 1; i >= 0; i--) {
+    const stepId = result.stepOrder[i];
+    if (!stepId) continue;
+    const step = result.steps[stepId];
+    if (!step || step.skipped || step.exitCode !== 0) continue;
+    if (step.stdout) return step.stdout;
+  }
+  return undefined;
 }
 
 /**

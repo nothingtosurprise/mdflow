@@ -1,5 +1,6 @@
 import { expect, test, describe, beforeAll, afterAll } from "bun:test";
 import { writeFile } from "fs/promises";
+import { existsSync } from "fs";
 import { join } from "path";
 import {
   extractFlag,
@@ -145,13 +146,13 @@ ${promptText}`
   });
 
   test("dry-run does NOT execute the command", async () => {
-    // Create a file that would fail if actually executed (bad command)
+    // A marker file the flow would create if the command actually ran.
     const testFile = await createTestAgent(
       tempDir,
-      "norun.nonexistent-command.md",
+      "norun.touch.md",
       `---
 ---
-This should not run.`
+${tempDir}/executed-marker`
     );
 
     const result = await spawnMd([testFile, "--_dry-run"]);
@@ -159,7 +160,26 @@ This should not run.`
     // Should exit 0 because dry-run prevents execution
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("DRY RUN");
-    expect(result.stdout).toContain("nonexistent-command");
+    expect(result.stdout).toContain("touch");
+    expect(existsSync(`${tempDir}/executed-marker`)).toBe(false);
+  });
+
+  test("unknown filename engine falls through the ladder with a warning (v3)", async () => {
+    const testFile = await createTestAgent(
+      tempDir,
+      "report.nonexistent-command.md",
+      `---
+---
+Just a document with a dotted name.`
+    );
+
+    const result = await spawnMd([testFile]);
+
+    // Not a runnable engine → warned, ladder falls through, and with no
+    // frontmatter the file is printed as a document.
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("ENGINE_NOT_FOUND");
+    expect(result.stdout).toContain("Just a document with a dotted name.");
   });
 
   test("dry-run with additional passthrough flags shows them in command", async () => {

@@ -21,6 +21,12 @@ import {
 } from "@inquirer/core";
 import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import {
+  detectJsonOutput,
+  detectUnifiedDiff,
+  extractStructured,
+  sinkApplyPatch,
+} from "./output";
 
 // Extended key event type (runtime has more properties than type declares)
 interface ExtendedKeyEvent extends KeypressEvent {
@@ -30,7 +36,14 @@ interface ExtendedKeyEvent extends KeypressEvent {
 
 /** Result from the post-run menu */
 export interface PostRunMenuResult {
-  action: "copy" | "save" | "run-command" | "exit";
+  action:
+  | "copy"
+  | "save"
+  | "copy-json"
+  | "save-json"
+  | "apply-patch"
+  | "run-command"
+  | "exit";
   /** For save action: the filename to save to */
   filename?: string;
   /** For run-command action: the command to run */
@@ -151,6 +164,8 @@ interface MenuOption {
 interface PostRunMenuConfig {
   output: string;
   extractedCommands: ExtractedCommand[];
+  hasJson: boolean;
+  hasPatch: boolean;
 }
 
 /**
@@ -158,11 +173,12 @@ interface PostRunMenuConfig {
  */
 export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
   (config, done) => {
-    const { output, extractedCommands } = config;
+    const { extractedCommands, hasJson, hasPatch } = config;
     const prefix = usePrefix({ status: "idle", theme: makeTheme({}) });
 
     const [cursor, setCursor] = useState(0);
     const [inputMode, setInputMode] = useState<"menu" | "filename" | "command-select">("menu");
+    const [saveTarget, setSaveTarget] = useState<"output" | "json">("output");
     const [filename, setFilename] = useState("");
     const [commandCursor, setCommandCursor] = useState(0);
 
@@ -171,6 +187,17 @@ export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
       { key: "c", label: "Copy output to clipboard", action: "copy" },
       { key: "s", label: "Save output to file...", action: "save" },
     ];
+
+    if (hasJson) {
+      options.push(
+        { key: "j", label: "Copy JSON to clipboard", action: "copy-json" },
+        { key: "n", label: "Save JSON to file...", action: "save-json" },
+      );
+    }
+
+    if (hasPatch) {
+      options.push({ key: "a", label: "Apply patch", action: "apply-patch" });
+    }
 
     if (extractedCommands.length > 0) {
       options.push({
@@ -188,7 +215,8 @@ export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
       if (inputMode === "filename") {
         if (isEnterKey(key)) {
           if (filename.trim()) {
-            done({ action: "save", filename: filename.trim() });
+            const action = saveTarget === "json" ? "save-json" : "save";
+            done({ action, filename: filename.trim() });
           } else {
             setInputMode("menu");
           }
@@ -196,6 +224,7 @@ export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
         }
         if (key.name === "escape") {
           setInputMode("menu");
+          setSaveTarget("output");
           setFilename("");
           return;
         }
@@ -238,6 +267,12 @@ export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
         const option = options[cursor];
         if (option) {
           if (option.action === "save") {
+            setSaveTarget("output");
+            setInputMode("filename");
+            return;
+          }
+          if (option.action === "save-json") {
+            setSaveTarget("json");
             setInputMode("filename");
             return;
           }
@@ -275,7 +310,21 @@ export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
         return;
       }
       if (key.name === "s") {
+        setSaveTarget("output");
         setInputMode("filename");
+        return;
+      }
+      if (key.name === "j" && hasJson) {
+        done({ action: "copy-json" });
+        return;
+      }
+      if (key.name === "n" && hasJson) {
+        setSaveTarget("json");
+        setInputMode("filename");
+        return;
+      }
+      if (key.name === "a" && hasPatch) {
+        done({ action: "apply-patch" });
         return;
       }
       if (key.name === "r" && extractedCommands.length > 0) {
@@ -292,7 +341,8 @@ export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
     const lines: string[] = [];
 
     if (inputMode === "filename") {
-      lines.push(`${prefix} Save output to file:`);
+      const label = saveTarget === "json" ? "Save JSON to file:" : "Save output to file:";
+      lines.push(`${prefix} ${label}`);
       lines.push(`  Filename: ${filename}_`);
       lines.push("");
       lines.push(`\x1b[90mPress Enter to save, Escape to cancel\x1b[0m`);
@@ -356,11 +406,15 @@ export async function showPostRunMenu(
   }
 
   const extractedCommands = extractCommands(output);
+  const hasJson = detectJsonOutput(output);
+  const hasPatch = detectUnifiedDiff(output);
 
   try {
     const result = await postRunMenu({
       output,
       extractedCommands,
+      hasJson,
+      hasPatch,
     });
 
     return result;
@@ -382,7 +436,7 @@ export async function executePostRunAction(
   output: string
 ): Promise<boolean> {
   switch (result.action) {
-    case "copy":
+    case "copy": {
       const copied = copyToClipboard(output);
       if (copied) {
         console.log("\x1b[32mOutput copied to clipboard.\x1b[0m");
@@ -390,6 +444,7 @@ export async function executePostRunAction(
         console.error("\x1b[31mFailed to copy to clipboard.\x1b[0m");
       }
       return copied;
+    }
 
     case "save":
       if (result.filename) {
@@ -402,6 +457,61 @@ export async function executePostRunAction(
         return saved;
       }
       return false;
+
+    case "copy-json": {
+      try {
+        const parsed = extractStructured(output, "json");
+        const json = JSON.stringify(parsed, null, 2);
+        const copied = copyToClipboard(json);
+
+        if (copied) {
+          console.log("\x1b[32mJSON copied to clipboard.\x1b[0m");
+        } else {
+          console.error("\x1b[31mFailed to copy JSON to clipboard.\x1b[0m");
+        }
+
+        return copied;
+      } catch {
+        console.error("\x1b[31mFailed to extract JSON from output.\x1b[0m");
+        return false;
+      }
+    }
+
+    case "save-json":
+      if (result.filename) {
+        try {
+          const parsed = extractStructured(output, "json");
+          const json = `${JSON.stringify(parsed, null, 2)}\n`;
+          const saved = saveToFile(json, result.filename);
+          if (saved) {
+            console.log(`\x1b[32mJSON saved to ${result.filename}\x1b[0m`);
+          } else {
+            console.error(`\x1b[31mFailed to save JSON to ${result.filename}\x1b[0m`);
+          }
+          return saved;
+        } catch {
+          console.error("\x1b[31mFailed to extract JSON from output.\x1b[0m");
+          return false;
+        }
+      }
+      return false;
+
+    case "apply-patch":
+      try {
+        const patch = extractStructured(output, "patch");
+        if (typeof patch !== "string") {
+          console.error("\x1b[31mExtracted patch output was not text.\x1b[0m");
+          return false;
+        }
+
+        sinkApplyPatch(patch);
+        console.log("\x1b[32mPatch applied with git apply.\x1b[0m");
+        return true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown patch apply error";
+        console.error(`\x1b[31mFailed to apply patch: ${message}\x1b[0m`);
+        return false;
+      }
 
     case "run-command":
       if (result.command) {

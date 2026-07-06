@@ -410,6 +410,30 @@ describe("substituteTemplateVars", () => {
       }
     });
   });
+
+  describe("edge cases", () => {
+    test("throws on invalid Liquid syntax", () => {
+      expect(() =>
+        substituteTemplateVars("{% if _name %}Hello {{ _name }}", { _name: "world" })
+      ).toThrow();
+    });
+
+    test("uses fallback for missing variables in filter chains", () => {
+      const result = substituteTemplateVars(
+        '{{ _missing | default: "fallback" | upcase }}',
+        {}
+      );
+      expect(result).toBe("FALLBACK");
+    });
+
+    test("renders complex filter chains deterministically", () => {
+      const result = substituteTemplateVars(
+        '{{ _name | strip | upcase | append: "!" | replace: " ", "_" }}',
+        { _name: "  hello world  " }
+      );
+      expect(result).toBe("HELLO_WORLD!");
+    });
+  });
 });
 
 describe("parseTemplateArgs", () => {

@@ -1,8 +1,14 @@
 import { expect, test, describe, beforeEach, afterEach } from "bun:test";
-import { parseCliArgs, findAgentFiles, getProjectAgentsDir, getUserAgentsDir } from "./cli";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import {
+  parseCliArgs,
+  findAgentFiles,
+  getProjectAgentsDir,
+  getUserAgentsDir,
+  clearDescriptionCache,
+} from "./cli";
+import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync, symlinkSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 
 describe("parseCliArgs", () => {
   test("extracts file path", () => {
@@ -47,6 +53,20 @@ describe("parseCliArgs", () => {
     expect(result.filePath).toBe("DEMO.md");
     expect(result.help).toBe(false);
     expect(result.passthroughArgs).toEqual(["--help", "--model", "opus"]);
+  });
+
+  test("handles malformed argv shape without throwing", () => {
+    const result = parseCliArgs([]);
+    expect(result.filePath).toBe("");
+    expect(result.help).toBe(false);
+    expect(result.passthroughArgs).toEqual([]);
+  });
+
+  test("treats missing file paths as positional arguments", () => {
+    const result = parseCliArgs(["node", "script", "does-not-exist.md", "--verbose"]);
+    expect(result.filePath).toBe("does-not-exist.md");
+    expect(result.passthroughArgs).toEqual(["--verbose"]);
+    expect(result.help).toBe(false);
   });
 });
 
@@ -126,5 +146,70 @@ describe("findAgentFiles", () => {
       expect(typeof file.path).toBe("string");
       expect(typeof file.source).toBe("string");
     }
+  });
+});
+
+describe("findAgentFiles edge cases", () => {
+  const originalCwd = process.cwd();
+  const originalPath = process.env.PATH;
+  let isolatedDir = "";
+
+  beforeEach(() => {
+    isolatedDir = mkdtempSync(join(tmpdir(), "mdflow-cli-edge-"));
+    process.chdir(isolatedDir);
+    process.env.PATH = "";
+    mkdirSync(join(isolatedDir, ".mdflow"), { recursive: true });
+    clearDescriptionCache();
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    process.env.PATH = originalPath;
+    clearDescriptionCache();
+
+    if (existsSync(isolatedDir)) {
+      rmSync(isolatedDir, { recursive: true, force: true });
+    }
+  });
+
+  test("handles invalid frontmatter and empty files without crashing", async () => {
+    const invalidName = `edge-invalid-${Date.now()}.md`;
+    const emptyName = `edge-empty-${Date.now()}.md`;
+    const validName = `edge-valid-${Date.now()}.md`;
+
+    writeFileSync(
+      join(isolatedDir, ".mdflow", invalidName),
+      "---\ndescription: broken\nmodel: [unterminated\nBody without closing delimiter"
+    );
+    writeFileSync(join(isolatedDir, ".mdflow", emptyName), "");
+    writeFileSync(
+      join(isolatedDir, ".mdflow", validName),
+      "---\ndescription: usable agent\n---\nBody"
+    );
+
+    const files = await findAgentFiles();
+    expect(files.some((file) => file.name === invalidName)).toBe(true);
+    expect(files.some((file) => file.name === emptyName)).toBe(true);
+    expect(files.find((file) => file.name === invalidName)?.description).toBeUndefined();
+    expect(files.find((file) => file.name === emptyName)?.description).toBeUndefined();
+    expect(files.find((file) => file.name === validName)?.description).toBe("usable agent");
+  });
+
+  test("continues scanning when a discovered path points to a missing target", async () => {
+    const presentName = `edge-present-${Date.now()}.md`;
+    writeFileSync(join(isolatedDir, ".mdflow", presentName), "---\ndescription: present\n---\nBody");
+
+    // Best-effort broken symlink test (may fail on restricted environments)
+    try {
+      symlinkSync(
+        join(isolatedDir, ".mdflow", "missing-target.md"),
+        join(isolatedDir, ".mdflow", "broken-link.md")
+      );
+    } catch {
+      // Continue without the symlink if the environment disallows it.
+    }
+
+    const files = await findAgentFiles();
+    expect(files.some((file) => file.name === presentName)).toBe(true);
   });
 });

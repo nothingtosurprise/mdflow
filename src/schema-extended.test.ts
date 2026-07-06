@@ -170,6 +170,26 @@ describe("frontmatter validation edge cases", () => {
       });
       expect(result.success).toBe(false);
     });
+
+    test("rejects object format keys that are not underscore-prefixed", () => {
+      const result = safeParseFrontmatter({
+        _inputs: {
+          name: { type: "text", default: "World" },
+        },
+      });
+      expect(result.success).toBe(false);
+      expect(result.errors).toBeDefined();
+    });
+
+    test("rejects text input defaults that are not strings", () => {
+      const result = safeParseFrontmatter({
+        _inputs: {
+          _name: { type: "text", default: 42 as any },
+        },
+      });
+      expect(result.success).toBe(false);
+      expect(result.errors).toBeDefined();
+    });
   });
 
   describe("passthrough behavior", () => {

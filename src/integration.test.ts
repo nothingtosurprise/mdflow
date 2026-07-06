@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { buildArgs, extractPositionalMappings, extractEnvVars } from "./command";
 import { expandImports } from "./imports";
 import { substituteTemplateVars, extractTemplateVars } from "./template";
+import { parseFrontmatter } from "./parse";
 import { validateFrontmatter } from "./schema";
 import type { AgentFrontmatter } from "./types";
 
@@ -233,6 +234,56 @@ describe("integration: full pipeline simulation", () => {
     // Step 6: Extract env vars
     const envVars = extractEnvVars(frontmatter as AgentFrontmatter);
     expect(envVars).toEqual({ DEBUG: "true" });
+  });
+
+  it("parses an agent .md file and builds final command inputs", async () => {
+    await Bun.write(join(testDir, "docs.md"), "release-notes: stable");
+    const agentFile = join(testDir, "deploy.claude.md");
+
+    await Bun.write(
+      agentFile,
+      `#!/usr/bin/env md
+---
+model: opus
+print: true
+$1: prompt
+_name: release-agent
+_env:
+  DEPLOY_ENV: prod
+---
+Deploy {{ _name }}
+Config: @./docs.md`
+    );
+
+    // Step 1: Read and parse .md file (shebang + YAML frontmatter + body)
+    const rawAgent = await Bun.file(agentFile).text();
+    const parsed = parseFrontmatter(rawAgent);
+
+    expect(parsed.frontmatter.model).toBe("opus");
+    expect(parsed.body).toContain("Deploy {{ _name }}");
+
+    // Step 2: Expand imports from body
+    const expandedBody = await expandImports(parsed.body, testDir);
+    expect(expandedBody).toContain("release-notes: stable");
+
+    // Step 3: Resolve template variables in content
+    const bodyTemplateVars = extractTemplateVars(expandedBody);
+    const renderedBody = substituteTemplateVars(expandedBody, {
+      _name: parsed.frontmatter._name as string,
+    }, { strict: true });
+    expect(renderedBody).toContain("Deploy release-agent");
+
+    // Step 4: Build CLI args and env from parsed frontmatter
+    const args = buildArgs(parsed.frontmatter as AgentFrontmatter, new Set(bodyTemplateVars));
+    const envVars = extractEnvVars(parsed.frontmatter as AgentFrontmatter);
+    const positional = extractPositionalMappings(parsed.frontmatter as AgentFrontmatter);
+
+    expect(args).toContain("--model");
+    expect(args).toContain("opus");
+    expect(args).toContain("--print");
+    expect(args).not.toContain("--_name");
+    expect(envVars).toEqual({ DEPLOY_ENV: "prod" });
+    expect(positional.get(1)).toBe("prompt");
   });
 });
 
