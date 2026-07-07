@@ -1,3 +1,10 @@
+# [3.0.0-next.5](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.4...v3.0.0-next.5) (2026-07-07)
+
+
+### Bug Fixes
+
+* **compat:** stamp _compat only on major/minor upgrades ([11cf84b](https://github.com/johnlindquist/mdflow/commit/11cf84b66dcfbdae91d20d0cd1212afc6ab70b05))
+
 # [3.0.0-next.4](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.3...v3.0.0-next.4) (2026-07-07)
 
 
