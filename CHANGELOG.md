@@ -1,3 +1,10 @@
+# [3.0.0-next.4](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.3...v3.0.0-next.4) (2026-07-07)
+
+
+### Features
+
+* **compat:** automatic frontmatter version/compatibility stamps ([df0e2b9](https://github.com/johnlindquist/mdflow/commit/df0e2b90aca929e87862eda508e4674e7edbb4fb))
+
 # [3.0.0-next.3](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.2...v3.0.0-next.3) (2026-07-06)
 
 
