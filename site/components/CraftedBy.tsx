@@ -170,7 +170,7 @@ export const CraftedBy: React.FC = () => {
                 viewport={{ once: true, margin: '-80px' }}
                 transition={{ duration: 0.6 }}
                 data-shader-credit
-                className="select-none max-w-3xl mx-auto flex flex-col sm:flex-row items-center gap-10 rounded-2xl border border-orange-500/15 bg-[#0a0a0c]/70 backdrop-blur-sm p-10 sm:p-12 shadow-[0_0_50px_-12px_rgba(249,115,22,0.3),0_0_120px_-30px_rgba(249,115,22,0.2)]"
+                className="select-none max-w-3xl mx-auto flex flex-col sm:flex-row items-center gap-10 rounded-2xl border border-orange-500/15 bg-[#0a0a0c]/70 backdrop-blur-sm p-6 sm:p-12 shadow-[0_0_50px_-12px_rgba(249,115,22,0.3),0_0_120px_-30px_rgba(249,115,22,0.2)]"
             >
                 {/* grabbable rubber-sheet eggo — stretch it, it snaps back;
                     dots treat it as a round bumper */}
@@ -234,7 +234,7 @@ export const CraftedBy: React.FC = () => {
                             data-shader-target="workshop"
                             data-shader-priority="1"
                             data-shader-gravity="1.3"
-                            className="group relative z-10 inline-flex items-center gap-3 px-6 py-3.5 rounded-lg bg-white text-black font-mono font-bold text-sm hover:scale-105 active:scale-95 transition-all duration-200 shadow-[0_0_20px_rgba(255,255,255,0.25)] hover:shadow-[0_0_25px_rgba(255,255,255,0.5),0_0_50px_rgba(249,115,22,0.7),0_0_100px_rgba(249,115,22,0.35)]"
+                            className="group relative z-10 inline-flex max-w-full items-center gap-2.5 sm:gap-3 px-4 py-3 sm:px-6 sm:py-3.5 rounded-lg bg-white text-black font-mono font-bold text-xs sm:text-sm hover:scale-105 active:scale-95 transition-all duration-200 shadow-[0_0_20px_rgba(255,255,255,0.25)] hover:shadow-[0_0_25px_rgba(255,255,255,0.5),0_0_50px_rgba(249,115,22,0.7),0_0_100px_rgba(249,115,22,0.35)]"
                         >
                             {/* the bolt gets its own stage: an orange chip
                                 with a slow radar ping behind a filled,

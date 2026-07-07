@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { shaderAudio, NOTE_COLUMNS, NOTE_ROWS } from './shaderAudio';
+import { shaderAudio, NOTE_COLUMNS, NOTE_ROWS, BPM } from './shaderAudio';
 
 /**
  * Full-page WebGL overlay that guides the eye toward key conversion points —
@@ -30,7 +30,9 @@ const MAX_PARTICLES = 32;
 const MAX_PATH = 24;      // recorded drag-stroke points (light drawing)
 const MAX_WALLS = 8;      // wave-blocking wall segments (tether + shift-chains)
 const WALL_LIFE = 10;     // seconds a drawn wall persists (fades over last 2s)
-const MAX_MONSTERS = 3;   // concurrent pixel monsters (the capture game)
+const MAX_MONSTERS = 6;   // sprite slots: up to 3 monsters + heart pickups
+const MONSTER_CAP = 3;    // concurrent pixel monsters (the capture game)
+const MAX_HEARTS = 5;     // the defense game: hearts the aliens raid
 const CHARGE_RANGE = 900; // px of stretch for a full slingshot charge
 const SHOCK_LIFE = 4.5;   // seconds a ripple lives; long enough to exit the screen
 // Everything drawn is a soft glow, so supersampling on retina buys nothing:
@@ -371,16 +373,31 @@ void main() {
     if (g.x < 0.0 || g.x > 7.0 || g.y < 0.0 || g.y > 7.0) continue;
     float gx = g.x < 4.0 ? g.x : 7.0 - g.x;          // bilateral symmetry
     float cell = hash(vec2(gx, g.y) * 7.31 + mn.w * 291.7);
+    // soft-edged cells so the sprite reads as made of light, not LEGO
+    vec2 cf = fract(gpos);
+    float pixm = smoothstep(0.0, 0.18, cf.x) * smoothstep(1.0, 0.82, cf.x)
+               * smoothstep(0.0, 0.18, cf.y) * smoothstep(1.0, 0.82, cf.y);
+    // a negative seed marks a HEART PICKUP: a fixed 8x8 heart bitmap in
+    // warm pink that beats on its own pulse (collect dissolve still applies)
+    if (mn.w < -0.5) {
+      float hon = 0.0;
+      if (g.y >= 4.0 && g.y <= 5.0) hon = 1.0;
+      if (g.y == 6.0 && gx >= 1.0) hon = 1.0;
+      if (g.y == 3.0 && gx >= 1.0) hon = 1.0;
+      if (g.y == 2.0 && gx >= 2.0) hon = 1.0;
+      if (g.y == 1.0 && gx >= 3.0) hon = 1.0;
+      hon *= step(st.y, 1.0 - cell * 0.99);
+      float hbeat = 0.75 + 0.4 * pow(max(sin(u_time * 3.4 + st.w), 0.0), 3.0);
+      vec3 hcol = mix(vec3(1.0, 0.20, 0.34), vec3(1.0, 0.62, 0.70), g.y / 7.0);
+      col += hon * pixm * hcol * hbeat * st.x * (0.9 + st.y * 1.5);
+      continue;
+    }
     float on = step(0.46, cell);
     // eyes: fixed sockets every creature shares, so they all read as alive
     float eye = (g.y == 4.0 && gx == 2.0) ? 1.0 : 0.0;
     on = max(on, eye);
     // capture dissolve: cells wink out in seeded order as the pop advances
     on *= step(st.y, 1.0 - cell * 0.99);
-    // soft-edged cells so the sprite reads as made of light, not LEGO
-    vec2 cf = fract(gpos);
-    float pixm = smoothstep(0.0, 0.18, cf.x) * smoothstep(1.0, 0.82, cf.x)
-               * smoothstep(0.0, 0.18, cf.y) * smoothstep(1.0, 0.82, cf.y);
     vec3 body = 0.55 + 0.45 * cos(6.2832 * (st.z + vec3(0.0, 0.33, 0.67)));
     float breathe = 0.8 + 0.2 * sin(u_time * 2.2 + st.w * 2.0);
     vec3 pcol = body * (0.6 + 0.4 * hash(vec2(gx, g.y) + floor(mn.w * 100.0)));
@@ -486,6 +503,21 @@ interface Monster {
   dieAt: number;          // performance.now() when it gives up and leaves
   chirpAt: number;        // next idle chirp
   fleeing: boolean;
+  hp: number;             // slingshot darts to bring it down
+  hitAt: number;          // last dart impact (brief invulnerability window)
+  raidAt: number;         // performance.now() when it turns on the hearts
+  raiding: boolean;       // beelining for the heart HUD right now
+}
+
+interface HeartDrop {
+  x: number; y: number;   // css px, viewport space
+  baseX: number;          // sway center
+  sway: number;           // sway phase
+  size: number;           // half-size, css px
+  alive: number;          // smoothed fade toward `fade`
+  fade: number;           // 1 while falling, 0 when expiring
+  pop: number;            // collect dissolve 0..1 (0 = uncollected)
+  bornAt: number;         // performance.now() of spawn
 }
 
 interface Particle {
@@ -809,8 +841,55 @@ export const ShaderGuide: React.FC = () => {
     // CLOSE the shape — any monster inside the gate dissolves into light.
     const monsters: Monster[] = [];
     let nextMonsterAt = performance.now() + 12000 + Math.random() * 18000;
+
+    // ---- the heart defense: aliens raid your hearts, pickups restore ----
+    let hearts = MAX_HEARTS;
+    let heartsShown = false; // HUD stays hidden until the first alien lands
+    let danceUntil = 0;      // aliens-won taunt party window
+    const heartDrops: HeartDrop[] = [];
+    let nextHeartAt = Infinity; // armed once the first heart is lost
+    const emitHearts = (reason: 'show' | 'steal' | 'gain' | 'defeat' | 'reset') => {
+      heartsShown = true;
+      window.dispatchEvent(new CustomEvent('mdflow:hearts', {
+        detail: { hearts, max: MAX_HEARTS, reason },
+      }));
+    };
+    // where the raiders are headed: the HUD's real rect when mounted
+    const heartsAnchor = () => {
+      const el = document.querySelector('[data-hearts-anchor]');
+      if (el) {
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+      return { x: window.innerWidth - 80, y: window.innerHeight - 30 };
+    };
+    const spawnHeart = (x?: number, y?: number) => {
+      if (heartDrops.length >= 2) return;
+      const W = window.innerWidth;
+      const hx = x ?? W * (0.15 + Math.random() * 0.7);
+      heartDrops.push({
+        x: hx, y: y ?? -30, baseX: hx,
+        sway: Math.random() * Math.PI * 2,
+        size: 14,
+        alive: 0, fade: 1, pop: 0,
+        bornAt: performance.now(),
+      });
+      shaderAudio.heartSpawn();
+    };
+    const collectHeart = (hd: HeartDrop) => {
+      hd.pop = 0.001;
+      hearts = Math.min(MAX_HEARTS, hearts + 1);
+      emitHearts('gain');
+      addShock(hd.x, hd.y, 0.6);
+      shaderAudio.heartGet();
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + Math.random() * 0.4;
+        spawnSpark(hd.x, hd.y, Math.cos(a) * 260, Math.sin(a) * 260, 0.5, 0, 0, 1, 0.8);
+      }
+    };
+
     const spawnMonster = () => {
-      if (monsters.length >= MAX_MONSTERS) return;
+      if (monsters.length >= MONSTER_CAP) return;
       const W = window.innerWidth;
       const H = window.innerHeight;
       let x = W / 2;
@@ -830,9 +909,13 @@ export const ShaderGuide: React.FC = () => {
         dieAt: performance.now() + 30000 + Math.random() * 25000,
         chirpAt: performance.now() + 1500 + Math.random() * 3000,
         fleeing: false,
+        hp: 2, hitAt: 0,
+        raidAt: performance.now() + 9000 + Math.random() * 9000,
+        raiding: false,
       });
       addShock(x, y, 0.35);
       shaderAudio.monsterSpawn(seed);
+      if (!heartsShown) emitHearts('show'); // the HUD arrives with the invaders
       // teleport shimmer: a ring of sparks collapses into the arrival point
       for (let k = 0; k < 6; k++) {
         const a = (k / 6) * Math.PI * 2 + Math.random() * 0.5;
@@ -853,10 +936,28 @@ export const ShaderGuide: React.FC = () => {
         spawnSpark(mn.x, mn.y, Math.cos(a) * s, Math.sin(a) * s,
           undefined, chord[k % chord.length] * 2, 0, 0.5, 1.1);
       }
+      // a downed raider sometimes drops what it came for
+      if (hearts < MAX_HEARTS && Math.random() < 0.5) spawnHeart(mn.x, mn.y);
       // the easter-egg layer counts the hunt
       window.dispatchEvent(new CustomEvent('mdflow:monster', {
         detail: { x: mn.x, y: mn.y, seed: mn.seed },
       }));
+    };
+
+    // the aliens win: they gather center-stage and taunt-dance to the
+    // groove, then swagger off — and mercy refills the hearts for round 2
+    const alienVictory = () => {
+      danceUntil = performance.now() + 9500;
+      while (monsters.filter(m => m.pop === 0 && !m.fleeing).length < 3
+             && monsters.length < MONSTER_CAP) {
+        spawnMonster();
+      }
+      for (const m of monsters) {
+        m.raiding = false;
+        m.dieAt = danceUntil + 8000; // nobody leaves mid-dance
+      }
+      shaderAudio.alienTaunt();
+      emitHearts('defeat');
     };
     // even-odd ray cast: is the point inside the closed gate polygon?
     const inPoly = (x: number, y: number, pts: { x: number; y: number }[]) => {
@@ -1017,6 +1118,14 @@ export const ShaderGuide: React.FC = () => {
       if (isEditable(e.target)) return;
       clearSelection(); // restore click-collapses-selection, which the
       // guards' user-select:none otherwise suppresses
+      // a falling heart can be caught by hand — tap it directly
+      for (const hd of heartDrops) {
+        if (hd.pop === 0 && hd.alive > 0.3
+            && Math.hypot(e.clientX - hd.x, e.clientY - hd.y) < hd.size + 26) {
+          collectHeart(hd);
+          break;
+        }
+      }
       if (e.shiftKey) {
         onShiftClick(e.clientX, e.clientY);
         return;
@@ -1346,6 +1455,19 @@ export const ShaderGuide: React.FC = () => {
       }
     };
     window.addEventListener('mdflow:fx', onFx);
+    // hidden summon hook: fills the monster roster and (optionally) puts
+    // them straight on the warpath — playtesting and e2e checks use this
+    const onInvasion = (ev: Event) => {
+      const d = (ev as CustomEvent<{ raidMs?: number }>).detail ?? {};
+      while (monsters.length < MONSTER_CAP) spawnMonster();
+      for (const mn of monsters) {
+        if (mn.pop === 0 && !mn.fleeing) {
+          mn.raidAt = performance.now() + (d.raidMs ?? 1500);
+          mn.dieAt = Math.max(mn.dieAt, performance.now() + 30000);
+        }
+      }
+    };
+    window.addEventListener('mdflow:invasion', onInvasion);
     window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('pointerdown', onDown, { passive: true });
     window.addEventListener('pointerup', onUp, { passive: true });
@@ -1816,6 +1938,40 @@ export const ShaderGuide: React.FC = () => {
           }
           break;
         }
+        // slingshot darts are the alien-hunting weapon: ONLY volley-carried
+        // sparks wound a monster — click sprays and fountains pass right
+        // through (a wall of dots would make the hunt trivial). Two clean
+        // darts bring one down; a brief invulnerability window keeps a
+        // single spread from one-shotting it.
+        if (p.volleyId > 0) {
+          for (const mn of monsters) {
+            if (mn.pop > 0 || mn.fleeing || mn.alive < 0.4) continue;
+            if (now - mn.hitAt < 350) continue;
+            if (Math.hypot(p.x - mn.x, p.y - mn.y) > mn.size + 10) continue;
+            mn.hitAt = now;
+            mn.hp--;
+            mn.alive = 1.7; // impact flash — eases back down to its fade
+            mn.vx += p.vx * 0.35; // knockback along the dart's path
+            mn.vy += p.vy * 0.35;
+            mn.raiding = false; // a hit breaks the raid charge
+            mn.raidAt = now + 6000 + Math.random() * 6000;
+            addShock(p.x, p.y, 0.5);
+            p.active = false;
+            volleySparkResolved(p, false);
+            if (mn.hp <= 0) captureMonster(mn);
+            else shaderAudio.monsterHit(mn.seed);
+            break;
+          }
+          if (!p.active) continue;
+        }
+        // any spark brushing a falling heart catches it — bank a burst or
+        // a volley off the pickup and it's yours
+        for (const hd of heartDrops) {
+          if (hd.pop > 0 || hd.alive < 0.3) continue;
+          if (Math.hypot(p.x - hd.x, p.y - hd.y) > hd.size + 8) continue;
+          collectHeart(hd);
+          break;
+        }
         // the eggo mark and the name sheet are bumpers: a spark that flew
         // into one this frame reflects off it. Sparks that STARTED inside
         // (e.g. shed by a rubber-sheet stretch) are left alone so they
@@ -1880,12 +2036,14 @@ export const ShaderGuide: React.FC = () => {
         }
       }
 
-      // ---- pixel monsters: spawn, swim, herd, flee, dissolve ----
+      // ---- pixel monsters: spawn, swim, raid, herd, flee, dissolve ----
       const nowMs = performance.now();
       if (nowMs > nextMonsterAt && !document.hidden) {
         nextMonsterAt = nowMs + 35000 + Math.random() * 35000;
         spawnMonster();
       }
+      const dancers = nowMs < danceUntil
+        ? monsters.filter(m => m.pop === 0 && !m.fleeing) : [];
       for (let i = monsters.length - 1; i >= 0; i--) {
         const mn = monsters[i];
         if (mn.pop > 0) {
@@ -1905,23 +2063,68 @@ export const ShaderGuide: React.FC = () => {
           monsters.splice(i, 1);
           continue;
         }
-        // wander: the heading drifts and the creature paddles along it
-        mn.wander += (Math.random() - 0.5) * dt * 4;
-        mn.vx += Math.cos(mn.wander) * 260 * dt;
-        mn.vy += Math.sin(mn.wander) * 260 * dt;
-        // shy: it slips away from the cursor, so pointing never catches it
-        const dc = Math.hypot(mn.x - smooth.x, mn.y - smooth.y);
-        if (dc < 240) {
-          const push = (1 - dc / 240) * 950 * dt;
-          mn.vx += ((mn.x - smooth.x) / Math.max(dc, 1)) * push;
-          mn.vy += ((mn.y - smooth.y) / Math.max(dc, 1)) * push;
-        }
         const W = window.innerWidth;
         const H = window.innerHeight;
+        const dancing = dancers.length > 0 && mn.pop === 0 && !mn.fleeing;
+        if (!dancing && !mn.fleeing && !mn.raiding && nowMs > mn.raidAt) {
+          // the turn: it stops playing coy and goes for your hearts
+          mn.raiding = true;
+          shaderAudio.monsterChirp(mn.seed);
+          addShock(mn.x, mn.y, 0.3);
+        }
+        if (dancing) {
+          // they won: line up center-stage and taunt-bop on the beat —
+          // sway, bounce, and a lazy counter-drift, all spring-followed
+          const di = Math.max(0, dancers.indexOf(mn));
+          const n = Math.max(1, dancers.length);
+          const beat = (nowMs / 1000) * (BPM / 60) * Math.PI;
+          const tx = W / 2 + (di - (n - 1) / 2) * Math.min(120, W / (n + 2))
+                   + Math.sin(beat + di * 2.1) * 30;
+          const ty = H * 0.4 - Math.abs(Math.sin(beat)) * 36
+                   + Math.sin(beat * 0.5 + di) * 10;
+          mn.vx += (tx - mn.x) * 26 * dt;
+          mn.vy += (ty - mn.y) * 26 * dt;
+        } else if (mn.raiding) {
+          // committed: it beelines for the hearts — an easy target for a
+          // slingshot dart, but expensive to ignore
+          const anchor = heartsAnchor();
+          const dxA = anchor.x - mn.x;
+          const dyA = anchor.y - mn.y;
+          const dA = Math.max(Math.hypot(dxA, dyA), 1);
+          if (dA < 46) {
+            hearts--;
+            emitHearts('steal');
+            shaderAudio.heartSteal(mn.seed);
+            addShock(anchor.x, anchor.y, -0.8);
+            mn.raiding = false;
+            mn.raidAt = nowMs + 12000 + Math.random() * 10000;
+            // victory hop: it bolts off with the loot
+            mn.vx += -(dxA / dA) * 750;
+            mn.vy += -(dyA / dA) * 750 - 150;
+            // a replacement heart will drift in eventually
+            nextHeartAt = Math.min(nextHeartAt, nowMs + 8000 + Math.random() * 8000);
+            if (hearts <= 0) alienVictory();
+          } else {
+            mn.vx += (dxA / dA) * 900 * dt;
+            mn.vy += (dyA / dA) * 900 * dt;
+          }
+        } else {
+          // wander: the heading drifts and the creature paddles along it
+          mn.wander += (Math.random() - 0.5) * dt * 4;
+          mn.vx += Math.cos(mn.wander) * 260 * dt;
+          mn.vy += Math.sin(mn.wander) * 260 * dt;
+          // shy: it slips away from the cursor, so pointing never catches it
+          const dc = Math.hypot(mn.x - smooth.x, mn.y - smooth.y);
+          if (dc < 240) {
+            const push = (1 - dc / 240) * 950 * dt;
+            mn.vx += ((mn.x - smooth.x) / Math.max(dc, 1)) * push;
+            mn.vy += ((mn.y - smooth.y) / Math.max(dc, 1)) * push;
+          }
+        }
         if (mn.fleeing) {
           // bolts for the nearest side and phases out
           mn.vx += (mn.x < W / 2 ? -1 : 1) * 700 * dt;
-        } else {
+        } else if (!mn.raiding && !dancing) {
           // soft walls keep it on the page while it lives
           const mrg = 60;
           if (mn.x < mrg) mn.vx += (mrg - mn.x) * 8 * dt;
@@ -1958,13 +2161,66 @@ export const ShaderGuide: React.FC = () => {
           else dragVib = 1;
           break;
         }
-        // idle chirps — each creature speaks its own scale degree
+        // idle chirps — each creature speaks its own scale degree;
+        // mid-dance they jeer constantly and shed confetti sparks
         if (nowMs > mn.chirpAt && mn.alive > 0.5) {
-          mn.chirpAt = nowMs + 4000 + Math.random() * 6000;
-          shaderAudio.monsterChirp(mn.seed);
+          if (dancing) {
+            mn.chirpAt = nowMs + 600 + Math.random() * 700;
+            shaderAudio.monsterChirp(mn.seed);
+            spawnSpark(mn.x, mn.y - mn.size,
+              (Math.random() - 0.5) * 240, -260 - Math.random() * 220,
+              0.7, 0, 0, 1, 0.8);
+          } else {
+            mn.chirpAt = nowMs + 4000 + Math.random() * 6000;
+            shaderAudio.monsterChirp(mn.seed);
+          }
         }
       }
-      anyMonsters = monsters.length > 0;
+      // the party's over: the troupe swaggers off and mercy refills you
+      if (danceUntil > 0 && nowMs >= danceUntil) {
+        danceUntil = 0;
+        for (const mn of monsters) {
+          if (mn.pop === 0 && !mn.fleeing) {
+            mn.fleeing = true;
+            mn.fade = 0;
+          }
+        }
+        if (monsters.length) shaderAudio.monsterFlee(monsters[0].seed);
+        hearts = MAX_HEARTS;
+        emitHearts('reset');
+        nextMonsterAt = nowMs + 25000 + Math.random() * 20000;
+      }
+      // heart pickups: drift down with a lazy sway until caught or lost
+      if (hearts < MAX_HEARTS && heartDrops.length === 0 && nowMs > nextHeartAt
+          && danceUntil === 0 && !document.hidden) {
+        spawnHeart();
+        nextHeartAt = nowMs + 16000 + Math.random() * 14000;
+      }
+      for (let i = heartDrops.length - 1; i >= 0; i--) {
+        const hd = heartDrops[i];
+        if (hd.pop > 0) {
+          hd.pop = Math.min(1, hd.pop + dt * 1.6);
+          hd.alive = Math.max(0, hd.alive - dt * 1.4);
+          if (hd.pop >= 1 && hd.alive <= 0.01) heartDrops.splice(i, 1);
+          continue;
+        }
+        if (nowMs - hd.bornAt > 16000 || hd.y > window.innerHeight - 80) hd.fade = 0;
+        hd.alive += (hd.fade - hd.alive) * (1 - Math.exp(-dt * 4));
+        if (hd.fade === 0 && hd.alive <= 0.02) {
+          heartDrops.splice(i, 1);
+          continue;
+        }
+        hd.y += 26 * dt;
+        hd.x = hd.baseX + Math.sin((nowMs / 1000) * 0.8 + hd.sway) * 42;
+      }
+      anyMonsters = monsters.length > 0 || heartDrops.length > 0;
+      // the aliens play their own theme: presence adds the invasion march
+      // to the groove, urgency (a raid or the victory dance) doubles it
+      const alienLiving = monsters.filter(m => m.pop === 0 && !m.fleeing && m.alive > 0.3);
+      shaderAudio.setAliens(
+        alienLiving.length,
+        alienLiving.length ? alienLiving[0].seed : 0,
+        danceUntil > 0 || alienLiving.some(m => m.raiding));
 
       // ---- pack uniforms ----
       rectData.fill(0);
@@ -2136,18 +2392,33 @@ export const ShaderGuide: React.FC = () => {
       gl.uniform1f(uTremble, tremble);
       monData.fill(0);
       monPopData.fill(0);
-      for (let i = 0; i < Math.min(monsters.length, MAX_MONSTERS); i++) {
-        const mn = monsters[i];
+      let si = 0;
+      for (const mn of monsters) {
+        if (si >= MAX_MONSTERS) break;
         // gentle bob so even a resting creature treads water
         const bob = Math.sin(shaderT * 1.8 + mn.seed * 31) * 5;
-        monData[i * 4 + 0] = mn.x * dpr;
-        monData[i * 4 + 1] = canvas.height - (mn.y + bob) * dpr;
-        monData[i * 4 + 2] = mn.size;
-        monData[i * 4 + 3] = mn.seed;
-        monPopData[i * 4 + 0] = mn.alive;
-        monPopData[i * 4 + 1] = mn.pop;
-        monPopData[i * 4 + 2] = mn.seed * 0.9 + 0.05; // hue
-        monPopData[i * 4 + 3] = mn.seed * 40;         // wobble phase
+        monData[si * 4 + 0] = mn.x * dpr;
+        monData[si * 4 + 1] = canvas.height - (mn.y + bob) * dpr;
+        monData[si * 4 + 2] = mn.size;
+        monData[si * 4 + 3] = mn.seed;
+        monPopData[si * 4 + 0] = Math.min(mn.alive, 2); // >1 = dart-hit flash
+        monPopData[si * 4 + 1] = mn.pop;
+        monPopData[si * 4 + 2] = mn.seed * 0.9 + 0.05; // hue
+        monPopData[si * 4 + 3] = mn.seed * 40;         // wobble phase
+        si++;
+      }
+      // heart pickups ride the same sprite slots, flagged by seed = -1
+      for (const hd of heartDrops) {
+        if (si >= MAX_MONSTERS) break;
+        monData[si * 4 + 0] = hd.x * dpr;
+        monData[si * 4 + 1] = canvas.height - hd.y * dpr;
+        monData[si * 4 + 2] = hd.size * (1 + 0.1 * Math.sin(shaderT * 3.4 + hd.sway));
+        monData[si * 4 + 3] = -1;
+        monPopData[si * 4 + 0] = hd.alive;
+        monPopData[si * 4 + 1] = hd.pop;
+        monPopData[si * 4 + 2] = 0;
+        monPopData[si * 4 + 3] = hd.sway;
+        si++;
       }
       gl.uniform4fv(uMon, monData);
       gl.uniform4fv(uMonPop, monPopData);
@@ -2171,6 +2442,7 @@ export const ShaderGuide: React.FC = () => {
       window.removeEventListener('mdflow:copied', onCopied);
       window.removeEventListener('mdflow:stretch', onStretch);
       window.removeEventListener('mdflow:fx', onFx);
+      window.removeEventListener('mdflow:invasion', onInvasion);
       window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('scroll', onScrollEnergy);
       for (const id of fxTimers) window.clearTimeout(id);

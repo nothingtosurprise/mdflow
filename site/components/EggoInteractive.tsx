@@ -592,9 +592,16 @@ export const StretchName: React.FC<{
         document.fonts?.ready.then(() => { if (alive) setReady(r => r + 1); }).catch(() => {});
         return () => { alive = false; };
     }, []);
-    const FONT = '700 46px "Space Grotesk", sans-serif';
-    const artW = 340;
-    const artH = 58;
+    // shrink the whole sheet (art + font) on narrow screens: a fixed 340px
+    // sheet is the widest thing on a phone and forces horizontal overflow
+    const [art] = useState(() => {
+        const w = typeof window === 'undefined' ? 340 : Math.min(340, window.innerWidth - 96);
+        const s = w / 340;
+        return { w, h: Math.round(58 * s), font: Math.round(46 * s) };
+    });
+    const FONT = `700 ${art.font}px "Space Grotesk", sans-serif`;
+    const artW = art.w;
+    const artH = art.h;
     // per-letter ink boxes, measured with the same font/pen the sheet draws
     // with (art-unit coordinates match the wrapper's css px)
     useEffect(() => {

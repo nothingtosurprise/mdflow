@@ -85,6 +85,15 @@
       html {
         touch-action: manipulation;
       }
+      /* Never let decorative overflow (stretch canvases, entrance
+         transforms, blur blobs) widen the layout viewport — on iOS that
+         expansion shoves fixed-position chrome (the nav's audio toggle)
+         past the screen edge. `clip` forbids even programmatic panning;
+         `hidden` is the older-engine fallback. */
+      html, body {
+        overflow-x: hidden;
+        overflow-x: clip;
+      }
       /* Custom Scrollbar for Cyber Aesthetic */
       ::-webkit-scrollbar {
         width: 8px;
@@ -103,7 +112,6 @@
       body {
         background-color: #050505;
         color: #e4e4e7;
-        overflow-x: hidden;
       }
       
       /* Background Grid Pattern */

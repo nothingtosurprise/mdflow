@@ -11,6 +11,7 @@ import { ShaderGuide } from './components/ShaderGuide';
 import { ShaderHints } from './components/ShaderHints';
 import { CraftedBy } from './components/CraftedBy';
 import { EasterEggs } from './components/EasterEggs';
+import { AlienDefense } from './components/AlienDefense';
 import { shaderAudio } from './components/shaderAudio';
 import { Terminal as TerminalIcon, Zap, Volume2, VolumeX } from 'lucide-react';
 
@@ -236,6 +237,9 @@ export default function App() {
 
       {/* 22 hidden easter eggs + the five-star secret puzzle */}
       <EasterEggs />
+
+      {/* heart HUD for the alien defense game (ShaderGuide owns the rules) */}
+      <AlienDefense />
 
       {/* Navigation */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/5 bg-[#050505]/80 backdrop-blur-xl">

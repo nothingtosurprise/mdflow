@@ -128,6 +128,9 @@ class ShaderAudioEngine {
   private prevKickAt = 0;
   private hitQueue: { t: number; type: 'kick' | 'snare' }[] = [];
   private boostUntil = 0; // copy-payoff: groove forced to full until this time
+  private alienCount = 0;   // pixel monsters on the page (invasion march)
+  private alienUrgent = false; // one is raiding / they're taunt-dancing
+  private tauntUntil = 0;   // aliens-won: march runs hot until this time
   private muted = true;
   private lastTick = 0;
 
@@ -269,6 +272,30 @@ class ShaderAudioEngine {
     return !this.muted && !!this.ctx && !!this.master;
   }
 
+  // ---- strike damping: rapidly re-struck "strings" deaden ----
+  // Physics of a real glockenspiel bar: a strike while the bar is still
+  // ringing chokes it. Each hit adds heat; heat cools with rest; the gain
+  // multiplier falls roughly by half per accumulated recent strike. A dot
+  // storm hammering one letter fades to near-silence, and the letter only
+  // sings at full voice again after it has been left alone for a moment.
+  private strikeHeat = new Map<string, { heat: number; at: number }>();
+  private strike(key: string, coolPerSec = 0.9): number {
+    const now = this.ctx ? this.ctx.currentTime : 0;
+    const s = this.strikeHeat.get(key) ?? { heat: 0, at: now };
+    s.heat = Math.max(0, s.heat - (now - s.at) * coolPerSec);
+    s.at = now;
+    const mul = Math.pow(0.55, s.heat);
+    s.heat = Math.min(6, s.heat + 1);
+    this.strikeHeat.set(key, s);
+    // bound the map so a long session can't grow it unbounded
+    if (this.strikeHeat.size > 256) {
+      for (const [k, v] of this.strikeHeat) {
+        if (now - v.at > 4) this.strikeHeat.delete(k);
+      }
+    }
+    return mul;
+  }
+
   private note(freq: number, opts: NoteOpts = {}) {
     if (!this.ready()) return;
     const { type = 'triangle', gain = 0.12, attack = 0.005, decay = 0.5, delay = 0, wet = 0 } = opts;
@@ -347,8 +374,11 @@ class ShaderAudioEngine {
   pluck(x01: number, y01: number, octave = 1): number {
     const f = (octave < 1 ? this.currentChord()[0] : this.chordToneAt(x01, y01)) * octave;
     const heavy = octave < 1 ? 1.4 : 1; // charged clicks land harder
-    this.note(f, { gain: 0.14 * heavy, decay: 0.6 * heavy });
-    this.note(f * 2, { type: 'sine', gain: 0.05 * heavy, decay: 0.35 });
+    // mash-clicking the same spot decrescendos instead of hammering; the
+    // floor keeps every deliberate click audible
+    const m = 0.35 + 0.65 * this.strike(`p${Math.round(f)}`, 1.4);
+    this.note(f, { gain: 0.14 * heavy * m, decay: 0.6 * heavy });
+    this.note(f * 2, { type: 'sine', gain: 0.05 * heavy * m, decay: 0.35 });
     // charged release detonates: descending sub boom scaled by the charge
     if (octave < 1 && this.ready()) {
       const ctx = this.ctx!;
@@ -372,7 +402,8 @@ class ShaderAudioEngine {
 
   /** Drag crossing a column/row boundary → a quick, quiet glissando pluck. */
   gliss(x01: number, y01: number) {
-    this.note(noteFor(x01, y01), { gain: 0.06, decay: 0.22 });
+    const f = noteFor(x01, y01);
+    this.note(f, { gain: 0.06 * this.strike(`g${Math.round(f)}`, 2.2), decay: 0.22 });
   }
 
   /** Untagged spark landing → the chord tone nearest the target, an octave
@@ -380,13 +411,17 @@ class ShaderAudioEngine {
   chime(x01: number, y01: number) {
     if (!this.ready()) return;
     const f = this.chordToneAt(x01, y01, 2);
-    this.note(f, { type: 'sine', gain: 0.05, decay: 0.9 });
-    this.note(f * 1.005, { type: 'sine', gain: 0.028, decay: 1.2 });
+    const m = this.strike(`c${Math.round(f)}`);
+    if (m < 0.05) return;
+    this.note(f, { type: 'sine', gain: 0.05 * m, decay: 0.9 });
+    this.note(f * 1.005, { type: 'sine', gain: 0.028 * m, decay: 1.2 });
   }
 
   /** A carrier spark landing → ring the exact tone it was launched with. */
   ringNote(freq: number) {
-    this.note(freq * 2, { type: 'sine', gain: 0.045, decay: 0.8, wet: 0.25 });
+    const m = this.strike(`r${Math.round(freq)}`);
+    if (m < 0.05) return;
+    this.note(freq * 2, { type: 'sine', gain: 0.045 * m, decay: 0.8, wet: 0.25 });
   }
 
   /** Click-on-target "data zap": a fast descending square-wave blip run. */
@@ -557,14 +592,21 @@ class ShaderAudioEngine {
       oct *= 2;
     }
     const f = SCALE[idx] * oct;
-    this.note(f, { type: 'triangle', gain: 0.055, decay: 0.4, wet: 0.2 });
-    this.note(f * 2, { type: 'sine', gain: 0.022, decay: 0.6, wet: 0.3 });
+    // each letter is its own bar: hammering one deadens IT, the letters
+    // beside it still ring bright — a dot storm plays a decrescendo, not
+    // a wall of equal-volume strikes
+    const m = this.strike(`L${i}`, 0.7);
+    if (m < 0.04) return;
+    this.note(f, { type: 'triangle', gain: 0.055 * m, decay: 0.4, wet: 0.2 });
+    this.note(f * 2, { type: 'sine', gain: 0.022 * m, decay: 0.6, wet: 0.3 });
   }
 
   /** A spark striking a drawn wall → the wall twangs like a string. */
   twang(freq: number) {
-    this.note(freq, { type: 'triangle', gain: 0.05, decay: 0.5, wet: 0.2 });
-    this.note(freq * 2.01, { type: 'sine', gain: 0.02, decay: 0.3, wet: 0.2 });
+    const m = this.strike(`t${Math.round(freq)}`);
+    if (m < 0.05) return;
+    this.note(freq, { type: 'triangle', gain: 0.05 * m, decay: 0.5, wet: 0.2 });
+    this.note(freq * 2.01, { type: 'sine', gain: 0.02 * m, decay: 0.3, wet: 0.2 });
   }
 
   /** While a still click is held: a dark rumble that swells with the
@@ -833,6 +875,74 @@ class ShaderAudioEngine {
     ]);
   }
 
+  /** A slingshot dart wounds a monster (not yet down): a sharp two-blip
+   * damage chirp on the creature's own voice. */
+  monsterHit(seed: number) {
+    const f = this.monsterNote(seed) * 2;
+    this.playNotes([
+      { f: f * 1.5, type: 'square', gain: 0.032, decay: 0.05 },
+      { f: f * 0.75, at: 0.05, type: 'square', gain: 0.026, decay: 0.1, wet: 0.2 },
+    ]);
+  }
+
+  /** The invasion tempo: how many aliens roam, whose voice leads, and
+   * whether one is charging the hearts (doubles the march). */
+  setAliens(count: number, _seed: number, urgent: boolean) {
+    this.alienCount = count;
+    this.alienUrgent = urgent;
+  }
+
+  /** A heart pickup drifts in: a tiny high shimmer announces it. */
+  heartSpawn() {
+    this.playNotes([
+      { f: 1046.5, type: 'sine', gain: 0.02, decay: 0.5, wet: 0.6 },
+      { f: 1318.5, at: 0.12, type: 'sine', gain: 0.018, decay: 0.7, wet: 0.7 },
+    ]);
+  }
+
+  /** A heart caught: a rising A-minor bell run — health back. */
+  heartGet() {
+    this.playNotes([440, 523.25, 659.25, 880].map((f, i) => (
+      { f, at: i * 0.07, type: 'sine' as OscillatorType, gain: 0.045, decay: 0.8, wet: 0.5 })));
+  }
+
+  /** An alien reaches the hearts and steals one: a sagging three-note
+   * womp — then the thief giggles on its own voice as it bolts. */
+  heartSteal(seed: number) {
+    if (!this.ready()) return;
+    const g = this.monsterNote(seed);
+    this.playNotes([
+      { f: 220, type: 'triangle', gain: 0.06, decay: 0.18 },
+      { f: 174.61, at: 0.14, type: 'triangle', gain: 0.06, decay: 0.22 },
+      { f: 146.83, at: 0.3, type: 'triangle', gain: 0.07, decay: 0.5, wet: 0.3 },
+      { f: g * 4, at: 0.52, type: 'square', gain: 0.02, decay: 0.05 },
+      { f: g * 3, at: 0.59, type: 'square', gain: 0.02, decay: 0.05 },
+      { f: g * 4, at: 0.66, type: 'square', gain: 0.02, decay: 0.09, wet: 0.3 },
+    ]);
+  }
+
+  /** The aliens won: the schoolyard taunt ("nyah-nyah nyah-nyah nyaaah"),
+   * twice, in key and on the groove's eighth grid, capped with a saw
+   * raspberry — while tauntUntil keeps the invasion march at double time. */
+  alienTaunt() {
+    if (!this.ready()) return;
+    this.tauntUntil = this.ctx!.currentTime + 9;
+    const stepT = 60 / BPM / 2; // eighths
+    const seq = [
+      { f: 392, s: 0 }, { f: 392, s: 1 }, { f: 329.63, s: 2 },
+      { f: 440, s: 3 }, { f: 392, s: 4 }, { f: 329.63, s: 6 },
+    ];
+    for (let r = 0; r < 2; r++) {
+      for (const n of seq) {
+        this.note(n.f * 2, {
+          type: 'square', gain: 0.045, decay: n.s === 6 ? 0.5 : 0.16,
+          delay: (r * 9 + n.s) * stepT, wet: 0.25,
+        });
+      }
+    }
+    this.sweep(600, 90, { type: 'sawtooth', gain: 0.05, dur: 0.7, delay: 19 * stepT, wet: 0.3 });
+  }
+
   /** A monster escapes before the gate finds it: a falling zip into a
    * downward whoosh — gone. */
   monsterFlee(seed: number) {
@@ -1093,6 +1203,24 @@ class ShaderAudioEngine {
         g.linearRampToValueAtTime(peak, t + 0.02);
         g.setValueAtTime(peak, t + step16 * 0.6);
         g.linearRampToValueAtTime(0.0001, t + step16 * 0.9);
+      }
+      // the invasion march: while pixel monsters roam the page, the classic
+      // four-note descent (A G F E, in key) stomps underneath whatever the
+      // groove is doing — quarter-note patrol steps, doubling to urgent
+      // eighths when one charges the hearts or the troupe is taunt-dancing.
+      // This layer ignores proximity on purpose: an alien APPEARING is what
+      // changes the song.
+      if (this.alienCount > 0 || this.tauntUntil > t) {
+        const urgent = this.alienUrgent || this.tauntUntil > t;
+        const stride = urgent ? 2 : 4;
+        if (s % stride === 0) {
+          const walk = [110, 98, 87.31, 82.41]; // A2 G2 F2 E2
+          const f = walk[Math.floor(s / stride) % 4];
+          const g = Math.min(0.05, 0.018 + this.alienCount * 0.008) * (urgent ? 1.3 : 1);
+          const delay = t - ctx.currentTime;
+          this.note(f, { type: 'square', gain: g, decay: 0.11, delay });
+          this.note(f * 2.02, { type: 'square', gain: g * 0.35, decay: 0.08, delay });
+        }
       }
       this.stepIdx = (s + 1) % 16;
       this.nextStep += step16;
