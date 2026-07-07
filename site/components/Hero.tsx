@@ -110,24 +110,23 @@ export const Hero: React.FC = () => {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ delay: 0.5, duration: 0.6 }}
-                        className="select-none flex flex-col sm:flex-row gap-5 items-start sm:items-center pt-4"
+                        className="select-none flex flex-wrap gap-4 items-stretch pt-4"
                     >
                         <button
                             onClick={copyInstall}
                             data-shader-target="install"
                             data-shader-priority="1"
-                            className="group relative flex items-center gap-4 px-8 py-5 bg-white text-black font-mono font-bold rounded-lg transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)] overflow-hidden w-full sm:w-auto"
+                            className="group flex items-center justify-center gap-3 px-6 py-4 bg-white text-black font-mono font-bold rounded-lg transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)] whitespace-nowrap w-full sm:w-auto"
                         >
-                            <span className="text-orange-600 font-bold text-xl">$</span>
+                            <span className="text-orange-600 font-bold text-lg">$</span>
                             <span className="tracking-tight text-lg">{facts.install}</span>
-                            <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-white to-transparent"></div>
-                            <div className="ml-4 pl-4 border-l border-zinc-200 text-zinc-400 group-hover:text-black transition-colors z-10">
-                                {copied ? <Check size={20} className="text-green-600" /> : <Copy size={20} />}
+                            <div className="ml-2 pl-3 border-l border-zinc-200 text-zinc-400 group-hover:text-black transition-colors">
+                                {copied ? <Check size={18} className="text-green-600" /> : <Copy size={18} />}
                             </div>
                         </button>
 
-                        <a href="#agent-first" data-shader-target="agent-first-link" data-shader-priority="0.45" className="px-6 py-4 text-zinc-400 hover:text-white transition-colors font-medium flex items-center gap-2 group">
-                            Or paste a prompt into your agent <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+                        <a href="#agent-first" data-shader-target="agent-first-link" data-shader-priority="0.45" className="group flex items-center justify-center gap-2 px-6 py-4 rounded-lg border border-white/15 text-zinc-300 hover:text-white hover:border-white/30 transition-colors font-medium whitespace-nowrap w-full sm:w-auto">
+                            Or paste a prompt <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
                         </a>
                     </motion.div>
 
