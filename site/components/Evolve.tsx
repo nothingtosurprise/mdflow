@@ -164,7 +164,7 @@ export const Evolve: React.FC = () => {
                         <span className="text-emerald-400">$</span> md complain flows/review.md <span className="text-zinc-500">"missed the race condition"</span>
                     </div>
                     <a
-                        href="https://tropic-hill-p35c.here.now/"
+                        href="/evolve-deep-dive/"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="group flex items-center gap-2 text-emerald-300 hover:text-emerald-200 transition-colors font-medium"

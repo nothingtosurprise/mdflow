@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "portless run --name mdflow vite",
     "dev:raw": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/build-content.mjs",
     "preview": "vite preview",
     "og-image": "node scripts/generate-og-image.mjs"
   },
@@ -21,6 +21,7 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.1.2",
+    "marked": "^18.0.5",
     "puppeteer": "^24.32.1",
     "typescript": "~5.8.2",
     "vite": "^6.4.1"
