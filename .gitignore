@@ -49,3 +49,5 @@ mdflow-core-bundle.md
 
 # web-choices HITL app session state
 .hitl-choice/
+.vercel
+.env*

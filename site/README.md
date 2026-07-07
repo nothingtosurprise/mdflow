@@ -1,24 +1,35 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# mdflow.dev — the website
 
-# Run and deploy your AI Studio app
+The landing page for [mdflow](https://github.com/johnlindquist/mdflow),
+deployed to https://mdflow.dev via Vercel (Root Directory = `site/`).
 
-This contains everything you need to run your app locally.
+Imported from the former `johnlindquist/mdflow.dev` repo so the CLI and its
+site ship from one place. Site-only commits use the `chore(site):` /
+`docs(site):` scopes so semantic-release never cuts a CLI release for a
+visual tweak.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1J6KElz8LP1DeIFwyAUjhlRiK2DdRgW_I
+## Facts vs art
 
-## Run Locally
+Factual copy (commands, flags, engines, version badge) renders from
+[`src/facts.json`](src/facts.json), which is **generated — do not edit it by
+hand**. Regenerate from the CLI source of truth at the repo root:
 
-**Prerequisites:**  Node.js
+```bash
+bun run facts          # rewrite site/src/facts.json
+bun run facts:check    # CI drift gate (fails if stale)
+```
 
+Everything else (headlines, shaders, easter eggs, audio) is hand-written art;
+edit freely.
 
-1. Install dependencies:
-   `npm install`
-2. Install [portless](https://github.com/johnlindquist/portless) globally (used for the named dev URL):
-   `npm install -g portless`
-3. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-4. Run the app:
-   `npm run dev`
+## Run locally
 
-   The dev server is served through portless at **http://mdflow.localhost:1355** (stable named URL, no port conflicts). Use `npm run dev:raw` to run Vite directly on its default port without the proxy, or `PORTLESS=0 npm run dev`.
+```bash
+npm install
+npm run dev        # via portless at http://mdflow.localhost:1355
+npm run dev:raw    # plain vite on its default port
+npm run build      # production build to dist/
+```
+
+`GEMINI_API_KEY` in `.env.local` is only needed for features that call
+Gemini at runtime; the build itself works without it.

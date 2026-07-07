@@ -43,6 +43,21 @@ bun run src/index.ts task.claude.md
 bun run md task.claude.md
 ```
 
+## Website (`site/`)
+
+The mdflow.dev landing page lives in `site/` (Vite + React, deployed via
+Vercel with Root Directory = `site`). Rules:
+
+- `site/src/facts.json` is **generated** by `scripts/generate-facts.ts` from
+  the adapter registry, `DEFAULT_ENGINE`, `cli-runner.ts` subcommands, and
+  package.json — never edit it by hand. `bun run facts` regenerates;
+  `bun run facts:check` runs in CI and fails on drift. Adding a subcommand to
+  `cli-runner.ts` requires a matching `COMMAND_DOCS` entry in the generator.
+- Site-only commits use `chore(site):` / `docs(site):` scopes so
+  semantic-release never cuts a CLI release for a visual change.
+- Factual site copy should render from facts.json; artistic copy (headlines,
+  shaders, easter eggs) is hand-written. See `docs/SITE-SYNC.md`.
+
 ## Architecture
 
 ### Core Flow (`src/index.ts`)

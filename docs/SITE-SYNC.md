@@ -1,7 +1,40 @@
 # Keeping mdflow.dev and the repo docs in sync
 
-Status: proposal. Written 2026-07-06 after a full audit of the site against
-the shipped `mdflow@3.0.0` CLI.
+Status: **executed 2026-07-06** (same day as the audit below). What landed:
+
+- The site lives at `site/` in this repo (imported from the
+  `johnlindquist/mdflow.dev` working tree; `.vercel` local link state and
+  caches excluded).
+- `scripts/generate-facts.ts` derives engines (adapter registry), the default
+  engine (`DEFAULT_ENGINE`), subcommands (scanned from `cli-runner.ts` —
+  an undocumented subcommand fails the build), md-flags, ladder, and base
+  version into `site/src/facts.json`. `ManPage.tsx` and `Hero.tsx` render
+  from it. `bun run facts` regenerates; `bun run facts:check` is wired into
+  `.github/workflows/test.yml`.
+- `package.json` gained a `files:` whitelist (tarball: 248 files/510kB →
+  82 files/201kB; `site/` can never ship to npm).
+- `site/vercel.json` carries the ignore-build command so CLI-only pushes
+  don't redeploy the site.
+
+## Remaining manual steps (Vercel dashboard, one-time)
+
+1. In the Vercel project **mdflow.dev** (`prj_GJKQu4COb2mF7TOutclFWxLnQ8cx`),
+   switch the connected Git repository to `johnlindquist/mdflow` and set
+   **Root Directory = `site`** (keep "Include files outside root directory"
+   off).
+2. Confirm the production branch matches this repo's default branch (`main`).
+3. After the first successful deploy from this repo, archive the old
+   `johnlindquist/mdflow.dev` repo (its art-history stays browsable there).
+
+Conventions from here on: site-only commits use `chore(site):` /
+`docs(site):` scopes so semantic-release never cuts a CLI release for a
+visual tweak.
+
+---
+
+The original proposal follows, for the reasoning of record. Written
+2026-07-06 after a full audit of the site against the shipped
+`mdflow@3.0.0` CLI.
 
 ## What the audit found
 

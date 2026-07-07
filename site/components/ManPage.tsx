@@ -1,4 +1,5 @@
 import React from 'react';
+import facts from '../src/facts.json';
 
 export const ManPage: React.FC = () => {
   return (
@@ -17,7 +18,7 @@ export const ManPage: React.FC = () => {
           <div className="absolute bottom-0 right-0 w-8 h-8 md:w-16 md:h-16 border-r-2 border-b-2 border-orange-500/50 rounded-br-xl"></div>
 
           <div className="flex justify-between mb-12 text-zinc-500 text-xs uppercase tracking-[0.3em] font-display border-b border-zinc-800 pb-4">
-            <span>SYS.MANUAL.V3.0.0-NEXT</span>
+            <span>{`SYS.MANUAL.V${facts.versionBase}`}</span>
             <span className="text-white font-bold">MDFLOW(1)</span>
           </div>
 
@@ -46,18 +47,13 @@ export const ManPage: React.FC = () => {
                 <div className="space-y-3 text-sm">
                   <p className="text-zinc-500 uppercase tracking-wider text-xs">Commands</p>
                   <div className="grid grid-cols-1 gap-2">
-                    <p><span className="text-emerald-400">init</span> [--engine &lt;e&gt;] [-y] <span className="text-zinc-500">bootstrap a flow roster (agent-guided; -y scaffolds deterministically)</span></p>
-                    <p><span className="text-emerald-400">create</span> [name] [flags] <span className="text-zinc-500">create a new flow file</span></p>
-                    <p><span className="text-emerald-400">explain</span> &lt;flow.md&gt; <span className="text-zinc-500">show resolved config without executing (free)</span></p>
-                    <p><span className="text-emerald-400">eval</span> &lt;flow.md&gt; <span className="text-zinc-500">run the flow's eval suite — costs engine turns</span></p>
-                    <p><span className="text-emerald-400">complain</span> &lt;flow.md&gt; "msg" <span className="text-zinc-500">record evolution evidence (free)</span></p>
-                    <p><span className="text-emerald-400">evolve</span> &lt;flow.md&gt; [--check] <span className="text-zinc-500">evidence-gated prompt evolution; --check is free</span></p>
-                    <p><span className="text-emerald-400">install</span> &lt;url|gh:org/repo/path@ref&gt; <span className="text-zinc-500">install a flow from a registry</span></p>
-                    <p><span className="text-emerald-400">remove</span> &lt;name&gt; <span className="text-zinc-500">remove an installed flow</span></p>
-                    <p><span className="text-emerald-400">list</span> <span className="text-zinc-500">list installed registry flows</span></p>
-                    <p><span className="text-emerald-400">setup</span> <span className="text-zinc-500">configure shell (PATH, aliases)</span></p>
-                    <p><span className="text-emerald-400">logs</span> <span className="text-zinc-500">show the flow log directory</span></p>
-                    <p><span className="text-emerald-400">help</span> <span className="text-zinc-500">full built-in help</span></p>
+                    {facts.commands.map((c) => (
+                      <p key={c.name}>
+                        <span className="text-emerald-400">{c.name}</span>
+                        {c.usage.slice(c.name.length)}{' '}
+                        <span className="text-zinc-500">{c.description}</span>
+                      </p>
+                    ))}
                   </div>
                 </div>
 
@@ -95,10 +91,12 @@ export const ManPage: React.FC = () => {
 
                   <p className="text-zinc-500 uppercase tracking-wider text-xs pt-2">md-Specific Flags</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    <p><span className="text-cyan-400">--_dry-run</span> <span className="text-zinc-500">preview without executing</span></p>
-                    <p><span className="text-cyan-400">--_edit</span> <span className="text-zinc-500">edit prompt in $EDITOR</span></p>
-                    <p><span className="text-cyan-400">--_context</span> <span className="text-zinc-500">show context tree</span></p>
-                    <p><span className="text-cyan-400">--raw</span> <span className="text-zinc-500">raw output (for piping)</span></p>
+                    {facts.mdFlags.map((f) => (
+                      <p key={f.flag}>
+                        <span className="text-cyan-400">{f.flag}</span>{' '}
+                        <span className="text-zinc-500">{f.description}</span>
+                      </p>
+                    ))}
                   </div>
 
                   <p className="text-zinc-500 uppercase tracking-wider text-xs pt-2">File Imports</p>
@@ -126,9 +124,8 @@ export const ManPage: React.FC = () => {
               <p className="pl-6 border-l border-zinc-800 leading-relaxed text-zinc-400 max-w-2xl">
                 <span className="font-bold text-white">mdflow</span> executes markdown files as AI flows.
                 Frontmatter YAML becomes CLI flags; the body becomes the prompt; the engine resolves
-                via the ladder (default: <span className="italic text-orange-400">pi</span>, hermetic, with your
-                Codex login bridged automatically). Engines: claude, codex, copilot, pi, cursor-agent,
-                agy (Antigravity), droid, opencode, or any CLI binary. Colocated
+                via the ladder (default: <span className="italic text-orange-400">{facts.defaultEngine}</span>, hermetic, with your
+                Codex login bridged automatically). Engines: {facts.enginesLabel}, or any CLI binary. Colocated
                 <span className="italic text-orange-400"> .eval.ts</span> suites prove a flow's behavior.
               </p>
             </div>

@@ -4,6 +4,7 @@ import { Terminal } from './Terminal';
 import { Editor } from './Editor';
 import { ArrowDown, Copy, Check, Zap, ChevronRight } from 'lucide-react';
 import { motion } from 'framer-motion';
+import facts from '../src/facts.json';
 
 const HERO_MD = `---
 description: research a feature
@@ -45,7 +46,7 @@ export const Hero: React.FC = () => {
     }, []);
 
     const copyInstall = (e: React.MouseEvent<HTMLButtonElement>) => {
-        navigator.clipboard.writeText('npx mdflow init');
+        navigator.clipboard.writeText(facts.install);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
         const r = e.currentTarget.getBoundingClientRect();
@@ -73,7 +74,7 @@ export const Hero: React.FC = () => {
                         <div className="flex items-center gap-3 mb-8">
                             <div data-egg="v3" className="inline-flex items-center px-4 py-1.5 rounded-full border border-orange-500/50 bg-orange-950/30 text-xs font-mono text-orange-200 backdrop-blur-md shadow-[0_0_15px_rgba(249,115,22,0.3)] cursor-pointer">
                                 <Zap size={12} className="mr-2 text-orange-400 fill-orange-400" />
-                                <span className="font-bold tracking-wider">V3.0.0 LIVE</span>
+                                <span className="font-bold tracking-wider">{`V${facts.versionBase} LIVE`}</span>
                             </div>
                             <a
                                 href="https://github.com/johnlindquist/mdflow"
@@ -118,7 +119,7 @@ export const Hero: React.FC = () => {
                             className="group relative flex items-center gap-4 px-8 py-5 bg-white text-black font-mono font-bold rounded-lg transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)] overflow-hidden w-full sm:w-auto"
                         >
                             <span className="text-orange-600 font-bold text-xl">$</span>
-                            <span className="tracking-tight text-lg">npx mdflow init</span>
+                            <span className="tracking-tight text-lg">{facts.install}</span>
                             <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-white to-transparent"></div>
                             <div className="ml-4 pl-4 border-l border-zinc-200 text-zinc-400 group-hover:text-black transition-colors z-10">
                                 {copied ? <Check size={20} className="text-green-600" /> : <Copy size={20} />}
