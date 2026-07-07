@@ -110,39 +110,35 @@ export const Hero: React.FC = () => {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ delay: 0.5, duration: 0.6 }}
-                        className="select-none flex flex-wrap gap-4 items-stretch pt-4"
+                        className="select-none pt-4"
                     >
-                        <button
-                            onClick={copyInstall}
-                            data-shader-target="install"
-                            data-shader-priority="1"
-                            className="group flex items-center justify-center gap-3 px-6 py-4 bg-white text-black font-mono font-bold rounded-lg transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)] whitespace-nowrap w-full sm:w-auto"
-                        >
-                            <span className="text-orange-600 font-bold text-lg">$</span>
-                            <span className="tracking-tight text-lg">{facts.install}</span>
-                            <div className="ml-2 pl-3 border-l border-zinc-200 text-zinc-400 group-hover:text-black transition-colors">
-                                {copied ? <Check size={18} className="text-green-600" /> : <Copy size={18} />}
-                            </div>
-                        </button>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                            <button
+                                onClick={copyInstall}
+                                data-shader-target="install"
+                                data-shader-priority="1"
+                                className="group inline-flex h-12 items-center justify-center gap-2.5 px-5 bg-white text-black font-mono font-semibold rounded-lg transition-all hover:scale-[1.03] active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.25)] hover:shadow-[0_0_30px_rgba(255,255,255,0.45)] whitespace-nowrap"
+                            >
+                                <span className="text-orange-600">$</span>
+                                <span className="tracking-tight">{facts.install}</span>
+                                <span className="ml-1 pl-3 border-l border-zinc-300 text-zinc-400 group-hover:text-black transition-colors">
+                                    {copied ? <Check size={16} className="text-green-600" /> : <Copy size={16} />}
+                                </span>
+                            </button>
 
-                        <a href="#agent-first" data-shader-target="agent-first-link" data-shader-priority="0.45" className="group flex items-center justify-center gap-2 px-6 py-4 rounded-lg border border-white/15 text-zinc-300 hover:text-white hover:border-white/30 transition-colors font-medium whitespace-nowrap w-full sm:w-auto">
-                            Or paste a prompt <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
-                        </a>
+                            <a href="#agent-first" data-shader-target="agent-first-link" data-shader-priority="0.45" className="group inline-flex h-12 items-center justify-center gap-1.5 px-5 rounded-lg border border-white/15 text-zinc-300 hover:text-white hover:border-white/30 transition-colors font-medium whitespace-nowrap">
+                                Or delegate it to your agent
+                                <ChevronRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
+                            </a>
+                        </div>
+
+                        <p className="mt-5 max-w-xl text-sm text-zinc-500 leading-relaxed">
+                            No install needed — it opens your agent CLI (claude, codex, cursor-agent, agy, …)
+                            with the setup guide, and the agent builds a <span className="font-mono text-zinc-400">./flows</span> roster
+                            tailored to your repo. Scripting? <span className="font-mono text-zinc-400">--yes</span> scaffolds
+                            it with zero engine turns.
+                        </p>
                     </motion.div>
-
-                    <motion.p
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: 0.7, duration: 0.6 }}
-                        className="select-none text-sm text-zinc-500 font-light -mt-2"
-                    >
-                        No install needed. It finds your agent CLI (claude, codex, cursor-agent, agy, …)
-                        and opens it pre-loaded with the setup guide: the agent explores your repo, proposes
-                        a flow roster tailored to <em className="text-zinc-300 not-italic">your</em> project,
-                        writes <span className="font-mono text-zinc-300">./flows</span> + <span className="font-mono text-zinc-300">.mdflow.yaml</span> once
-                        you approve, and proves every flow with free dry runs.
-                        Scripting? <span className="font-mono text-zinc-300">--yes</span> scaffolds the starter roster with zero engine turns.
-                    </motion.p>
                 </div>
 
                 {/* Hero Demo - Hidden on small mobile, visible on desktop */}
