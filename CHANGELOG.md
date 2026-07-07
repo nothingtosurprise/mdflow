@@ -1,3 +1,10 @@
+# [3.0.0-next.6](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.5...v3.0.0-next.6) (2026-07-07)
+
+
+### Bug Fixes
+
+* **pkg:** whitelist published files; add site facts generator ([909812b](https://github.com/johnlindquist/mdflow/commit/909812bd27a82d30b4fcd254502849d789f7cb1c))
+
 # [3.0.0-next.5](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.4...v3.0.0-next.5) (2026-07-07)
 
 
