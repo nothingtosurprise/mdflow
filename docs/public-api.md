@@ -113,8 +113,10 @@ Flows track which mdflow they work with, fully automatically:
 
 - `md create` and `md init` stamp `_mdflow_version` at creation time.
 - After any successful local run, mdflow records the running version in
-  `_compat` (added if missing, upgraded if older). Remote flows and eval
-  sandboxes are never stamped; failed stamps never affect the run.
+  `_compat` (added if missing; upgraded when the recorded version is behind
+  on major or minor — patch/prerelease skew never rewrites files). Remote
+  flows and eval sandboxes are never stamped; failed stamps never affect
+  the run.
 - On a major-version mismatch between the recorded version and the running
   mdflow, a dim one-line notice is printed to stderr; execution is never
   blocked, and the next clean run re-verifies the flow.

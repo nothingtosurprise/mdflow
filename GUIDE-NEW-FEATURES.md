@@ -514,7 +514,9 @@ How it works:
   running mdflow version.
 - **Verification**: after any successful local run, mdflow stamps (or
   upgrades) `_compat`. Flows created before this system existed get tagged
-  the first time they run cleanly.
+  the first time they run cleanly. Upgrades only fire when the recorded
+  version is behind on major or minor — mdflow patch releases never touch
+  your flows.
 - **Skew notice**: if a flow's recorded version and your mdflow disagree on
   major version, a dim one-line notice appears on stderr. Execution is never
   blocked — the next clean run re-verifies automatically.

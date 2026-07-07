@@ -144,9 +144,19 @@ describe("applyCompatStamp", () => {
     expect(next).toBe("---\n_mdflow_version: 3.0.0\n_compat: 3.1.0\n---\n\nBody\n");
   });
 
-  it("treats a release as newer than its own prerelease", () => {
-    const next = applyCompatStamp("---\n_compat: 3.0.0-next.2\n---\n\nBody\n", "3.0.0");
-    expect(next).toBe("---\n_compat: 3.0.0\n---\n\nBody\n");
+  it("skips patch- and prerelease-level upgrades to avoid git churn", () => {
+    expect(applyCompatStamp("---\n_compat: 3.0.0-next.2\n---\n\nBody\n", "3.0.0")).toBeNull();
+    expect(applyCompatStamp("---\n_compat: 3.0.0\n---\n\nBody\n", "3.0.5")).toBeNull();
+    expect(applyCompatStamp("---\n_mdflow_version: 3.1.0\n---\n\nBody\n", "3.1.9")).toBeNull();
+  });
+
+  it("stamps minor and major upgrades", () => {
+    expect(applyCompatStamp("---\n_compat: 3.0.9\n---\n\nBody\n", "3.1.0")).toBe(
+      "---\n_compat: 3.1.0\n---\n\nBody\n"
+    );
+    expect(applyCompatStamp("---\n_compat: 2.9.0\n---\n\nBody\n", "3.0.0")).toBe(
+      "---\n_compat: 3.0.0\n---\n\nBody\n"
+    );
   });
 
   it("creates a frontmatter block for bare files", () => {

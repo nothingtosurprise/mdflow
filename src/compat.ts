@@ -196,8 +196,12 @@ export function stampCreatedVersion(content: string, version = mdflowVersion()):
 
 /**
  * Compute the post-success `_compat` stamp. Returns the new content, or null
- * when no write is needed (already verified at this version or newer).
- * Pure — file IO lives in stampCompatFile.
+ * when no write is needed. Pure — file IO lives in stampCompatFile.
+ *
+ * Writes only when it matters: when the flow carries no version info at all,
+ * or when the recorded version is behind on major or minor. Patch and
+ * prerelease bumps of mdflow do NOT rewrite every flow — that would turn
+ * each release into a wall of one-line git diffs across users' repos.
  */
 export function applyCompatStamp(content: string, version = mdflowVersion()): string | null {
   const current = parseVersion(version);
@@ -211,7 +215,10 @@ export function applyCompatStamp(content: string, version = mdflowVersion()): st
   }
 
   const recorded = recordedVersion(fm);
-  if (recorded && compareVersions(recorded, current) >= 0) return null;
+  if (recorded) {
+    if (compareVersions(recorded, current) >= 0) return null;
+    if (recorded.major === current.major && recorded.minor === current.minor) return null;
+  }
 
   const next = setFrontmatterKey(content, "_compat", version);
   return next === content ? null : next;

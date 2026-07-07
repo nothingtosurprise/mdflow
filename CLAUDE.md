@@ -168,6 +168,8 @@ works with, with zero user involvement. `md create`/`md init` stamp
 `_mdflow_version` (version created with); after any successful local run,
 mdflow stamps/upgrades `_compat` (newest version verified to work) via a
 surgical frontmatter edit that preserves the rest of the file byte for byte.
+Upgrades only fire on major/minor skew — patch and prerelease bumps never
+rewrite flows (no per-release git churn).
 Remote flows and eval runs (`MDFLOW_EVAL_RUN=1`) are never stamped. A major
 mismatch between the recorded version and the running mdflow prints a dim
 stderr notice but never blocks. Frontmatter containing only these keys still
