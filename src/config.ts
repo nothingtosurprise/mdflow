@@ -73,34 +73,35 @@ export const BUILTIN_DEFAULTS: GlobalConfig = {
   commands: buildBuiltinDefaults(),
 };
 
-/**
- * Apply _interactive mode transformations to frontmatter
- * Converts print defaults to interactive mode per command
- *
- * Uses the tool adapter registry to delegate tool-specific transformations.
- *
- * @param frontmatter - The frontmatter after defaults are applied
- * @param command - The resolved command name
- * @param interactiveFromFilename - Whether .i. was detected in filename
- * @returns Transformed frontmatter for interactive mode
- */
-export function applyInteractiveMode(
+/** Resolve whether frontmatter or an external marker requests a terminal UI. */
+export function isInteractiveModeEnabled(
   frontmatter: AgentFrontmatter,
-  command: string,
   interactiveFromExternal: boolean = false
-): AgentFrontmatter {
+): boolean {
   // Check if _interactive or _i is enabled
   // Can be: true, empty string (YAML key with no value), null (YAML key with explicit null), or external trigger
   // NOTE: We check key existence separately because ?? treats null as "nullish" and skips to next value
   const hasInteractiveKey = "_interactive" in frontmatter;
   const hasIKey = "_i" in frontmatter;
   const interactiveValue = hasInteractiveKey ? frontmatter._interactive : frontmatter._i;
-  const interactiveMode = interactiveFromExternal ||
+  return interactiveFromExternal ||
     interactiveValue === true ||
     interactiveValue === "" ||
     (hasInteractiveKey && interactiveValue === null) ||
     (hasIKey && interactiveValue === null) ||
     (interactiveValue !== undefined && interactiveValue !== false);
+}
+
+/**
+ * Apply _interactive mode transformations to frontmatter.
+ * Converts print defaults to interactive mode through the engine adapter.
+ */
+export function applyInteractiveMode(
+  frontmatter: AgentFrontmatter,
+  command: string,
+  interactiveFromExternal: boolean = false
+): AgentFrontmatter {
+  const interactiveMode = isInteractiveModeEnabled(frontmatter, interactiveFromExternal);
 
   if (!interactiveMode) {
     return frontmatter;

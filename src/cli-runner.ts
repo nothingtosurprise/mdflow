@@ -41,7 +41,7 @@ import {
 } from "./context-dashboard";
 import { loadEnvFiles } from "./env";
 import {
-  loadFullConfig, applyDefaults, applyInteractiveMode,
+  loadFullConfig, applyDefaults, applyInteractiveMode, isInteractiveModeEnabled,
 } from "./config";
 import { getAdapter as getEngineAdapter } from "./adapters";
 import {
@@ -168,6 +168,8 @@ export interface CliRunnerOptions {
   promptInput?: (message: string) => Promise<string>;
   /** Custom prompt with history function (for testing) */
   promptInputWithHistory?: (message: string, defaultValue?: string) => Promise<string>;
+  /** Command executor override for deterministic orchestration tests. */
+  runCommandFn?: typeof runCommand;
 }
 
 /** CliRunner - Main orchestrator for mdflow CLI */
@@ -180,6 +182,7 @@ export class CliRunner {
   private stdinContent: string | undefined;
   private promptInput: (message: string) => Promise<string>;
   private promptInputWithHistory: (message: string, defaultValue?: string) => Promise<string>;
+  private runCommandFn: typeof runCommand;
   private jsonModeState: JsonModeState | null = null;
 
   constructor(options: CliRunnerOptions) {
@@ -200,6 +203,7 @@ export class CliRunner {
       const inputFn = await getInputPrompt();
       return inputFn({ message: msg, default: defaultValue });
     });
+    this.runCommandFn = options.runCommandFn ?? runCommand;
   }
 
   private async readStdin(): Promise<string> {
@@ -371,7 +375,7 @@ export class CliRunner {
     ctx: Parameters<typeof runCommand>[0],
     jsonMode: boolean
   ): Promise<Awaited<ReturnType<typeof runCommand>>> {
-    if (!jsonMode) return runCommand(ctx);
+    if (!jsonMode) return this.runCommandFn(ctx);
 
     const spawnArgs = this.buildSpawnArgs(ctx.args, ctx.positionals, ctx.positionalMappings);
     this.recordJsonCommand(ctx.command, spawnArgs);
@@ -382,7 +386,7 @@ export class CliRunner {
     console.error = () => {};
 
     try {
-      const result = await runCommand(ctx);
+      const result = await this.runCommandFn(ctx);
       this.recordJsonResult(result.stdout, result.stderr);
       return result;
     } finally {
@@ -739,7 +743,7 @@ export class CliRunner {
     // Parse CLI flags
     const parsed = this.parseFlags(passthroughArgs);
 
-    const { command, frontmatter, templateVars, finalBody, args, positionalMappings } =
+    const { command, frontmatter, templateVars, finalBody, args, positionalMappings, interactiveMode } =
       await this.processAgent(virtualFilename, baseFrontmatter, rawBody, stdinContent, parsed);
 
     // Dry run
@@ -785,16 +789,18 @@ export class CliRunner {
     getCommandLogger().info({ command, argsCount: finalRunArgs.length, promptLength: promptToRun.length, adhoc: true }, "Executing ad-hoc command");
 
     // Start spinner with command preview
-    if (!parsed.jsonMode) {
+    if (!parsed.jsonMode && !interactiveMode) {
       const preview = formatCommandPreview(command, finalRunArgs);
       startSpinner(preview);
     }
 
     // Determine if we should capture output for post-run menu
     // Disable when piping (stdout not TTY) to support: foo.md | bar.md
-    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
+    const shouldShowMenu = !interactiveMode && this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
     const structuredOutputConfig = this.getStructuredOutputConfig(frontmatter);
-    const captureMode = parsed.jsonMode
+    const captureMode = interactiveMode
+      ? false
+      : parsed.jsonMode
       ? "capture" as const
       : shouldShowMenu
         ? "tee" as const
@@ -807,7 +813,8 @@ export class CliRunner {
       positionals: [promptToRun],
       positionalMappings,
       captureOutput: captureMode,
-      captureStderr: parsed.jsonMode || shouldShowMenu,
+      captureStderr: !interactiveMode && (parsed.jsonMode || shouldShowMenu),
+      interactive: interactiveMode,
       env: extractEnvVars(frontmatter),
       rawOutput: parsed.rawOutput,
     }, parsed.jsonMode);
@@ -946,7 +953,7 @@ export class CliRunner {
       throw new EarlyExitRequest();
     }
 
-    const { command, frontmatter, templateVars, finalBody, args, positionalMappings } =
+    const { command, frontmatter, templateVars, finalBody, args, positionalMappings, interactiveMode } =
       await this.processAgent(localFilePath, baseFrontmatter, rawBody, stdinContent, parsed);
 
     // Show context dashboard before execution (unless --_quiet)
@@ -1157,10 +1164,12 @@ export class CliRunner {
     // Determine if we should capture output for post-run menu
     // Only capture when: TTY (stdin+stdout), not piped, menu not disabled
     // Checking stdout.isTTY enables piping: foo.md | bar.md
-    const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
+    const shouldShowMenu = !interactiveMode && this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
     const structuredOutputConfig = this.getStructuredOutputConfig(frontmatter);
-    // Always capture stderr when in interactive mode for failure menu
-    const captureMode = parsed.jsonMode
+    // Terminal UIs own stdio; one-shot commands may be captured for menus/output.
+    const captureMode = interactiveMode
+      ? false
+      : parsed.jsonMode
       ? "capture" as const
       : shouldShowMenu
         ? "tee" as const
@@ -1176,7 +1185,7 @@ export class CliRunner {
       getCommandLogger().info({ command, argsCount: finalRunArgs.length, promptLength: currentPrompt.length, retryCount }, "Executing command");
 
       // Start spinner with command preview (will be stopped when first output arrives)
-      if (!parsed.jsonMode) {
+      if (!parsed.jsonMode && !interactiveMode) {
         const preview = formatCommandPreview(command, finalRunArgs);
         startSpinner(preview);
       }
@@ -1187,7 +1196,8 @@ export class CliRunner {
         positionals: [currentPrompt],
         positionalMappings,
         captureOutput: captureMode,
-        captureStderr: shouldShowMenu || parsed.jsonMode, // Capture stderr for failure menu/json output
+        captureStderr: !interactiveMode && (shouldShowMenu || parsed.jsonMode), // TUI engines own terminal stderr
+        interactive: interactiveMode,
         env: extractEnvVars(frontmatter),
         rawOutput: parsed.rawOutput,
       }, parsed.jsonMode);
@@ -1677,6 +1687,10 @@ export class CliRunner {
         )
       : applyDefaults(baseFrontmatter as AgentFrontmatter, commandDefaults);
     const interactiveFromFilename = hasInteractiveMarker(localFilePath);
+    const interactiveMode = !jsonMode && isInteractiveModeEnabled(
+      frontmatter,
+      interactiveFromFilename || interactiveFromCli
+    );
     frontmatter = applyInteractiveMode(frontmatter, command, interactiveFromFilename || interactiveFromCli);
 
     // System prompt override (v3): translate _system-prompt /
@@ -1902,7 +1916,7 @@ export class CliRunner {
     const args = [...buildArgs(frontmatter, templateVarSet, command), ...remaining];
     const positionalMappings = extractPositionalMappings(frontmatter);
 
-    return { command, frontmatter, templateVars, finalBody, args, positionalMappings };
+    return { command, frontmatter, templateVars, finalBody, args, positionalMappings, interactiveMode };
   }
 
   private async handleDryRun(

@@ -566,6 +566,11 @@ export interface RunContext {
   cwd?: string;
   /** Capture without replaying captured streams to the terminal. */
   silentCapture?: boolean;
+  /**
+   * Run a terminal UI. Interactive engines must inherit all terminal streams;
+   * piping even one output stream makes tools such as Codex reject the launch.
+   */
+  interactive?: boolean;
 }
 
 export interface RunResult {
@@ -590,6 +595,33 @@ function normalizeCaptureMode(mode: boolean | CaptureMode): CaptureMode {
   if (mode === true) return "capture";
   if (mode === false) return "none";
   return mode;
+}
+
+export interface CommandStdioPolicy {
+  stdin: "inherit";
+  stdout: "inherit" | "pipe";
+  stderr: "inherit" | "pipe";
+}
+
+export function resolveCommandStdio(options: {
+  mode: CaptureMode;
+  captureStderr: boolean;
+  spinnerActive: boolean;
+  interactive: boolean;
+}): CommandStdioPolicy {
+  if (options.interactive) {
+    return { stdin: "inherit", stdout: "inherit", stderr: "inherit" };
+  }
+
+  const shouldPipeStdout =
+    options.mode === "capture" || options.mode === "tee" || options.spinnerActive;
+  const shouldPipeStderr =
+    (options.mode === "capture" || options.mode === "tee") && options.captureStderr;
+  return {
+    stdin: "inherit",
+    stdout: shouldPipeStdout ? "pipe" : "inherit",
+    stderr: shouldPipeStderr ? "pipe" : "inherit",
+  };
 }
 
 function hasNullByte(value: string): boolean {
@@ -624,9 +656,9 @@ function formatSpawnPreview(command: string, args: string[]): string {
  * - Use rawOutput: true (--raw flag) to bypass rendering for piping
  */
 export async function runCommand(ctx: RunContext): Promise<RunResult> {
-  const { command, args, positionals, positionalMappings, captureOutput, env, captureStderr = false, rawOutput = false } = ctx;
+  const { command, args, positionals, positionalMappings, captureOutput, env, captureStderr = false, rawOutput = false, interactive = false } = ctx;
 
-  const mode = normalizeCaptureMode(captureOutput);
+  const mode = interactive ? "none" : normalizeCaptureMode(captureOutput);
   const normalizedCommand = command.trim();
 
   if (!normalizedCommand) {
@@ -708,14 +740,12 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
 
   // Determine stdout/stderr pipe config based on mode
   // When spinner is running, we need to pipe stdout to detect first output
-  const spinnerActive = isSpinnerRunning();
-  const shouldPipeStdout = mode === "capture" || mode === "tee" || spinnerActive;
-  const shouldPipeStderr = (mode === "capture" || mode === "tee") && captureStderr;
+  const spinnerActive = !interactive && isSpinnerRunning();
+  if (interactive) stopSpinner();
+  const stdio = resolveCommandStdio({ mode, captureStderr, spinnerActive, interactive });
 
   const proc = Bun.spawn([normalizedCommand, ...finalArgs], {
-    stdout: shouldPipeStdout ? "pipe" : "inherit",
-    stderr: shouldPipeStderr ? "pipe" : "inherit",
-    stdin: "inherit",
+    ...stdio,
     env: runEnv,
     cwd: ctx.cwd,
     detached: process.platform !== "win32",
@@ -771,7 +801,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
       );
     }
 
-    if (proc.stderr && shouldPipeStderr) {
+    if (proc.stderr && stdio.stderr === "pipe") {
       promises.push(
         teeToStderrAndCollect(proc.stderr).then((content) => {
           stderr = content;
@@ -795,7 +825,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
       }
     }
 
-    if (proc.stderr && shouldPipeStderr) {
+    if (proc.stderr && stdio.stderr === "pipe") {
       stderr = await new Response(proc.stderr).text();
       if (!ctx.silentCapture) console.error(stderr);
     }

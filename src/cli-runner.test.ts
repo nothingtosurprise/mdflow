@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { CliRunner, createCliRunner } from "./cli-runner";
 import { createTestEnvironment, InMemorySystemEnvironment } from "./system-environment";
 import { clearConfigCache } from "./config";
+import type { RunContext, RunResult } from "./command";
 
 /**
  * CliRunner Tests
@@ -143,6 +144,50 @@ Test with array`);
 
       const result = await runner.run(["node", "md", "/test/dryrun-array.echo.md", "--_dry-run"]);
       expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("interactive engine execution", () => {
+    it("marks the command as interactive and disables capture for terminal UIs", async () => {
+      env.addFile("/test/interactive.md", `---
+description: Interactive Codex
+engine: codex
+---
+Start an interactive session.`);
+
+      let captured: RunContext | undefined;
+      const runCommandFn = async (ctx: RunContext): Promise<RunResult> => {
+        captured = ctx;
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          output: "",
+          process: null as unknown as ReturnType<typeof Bun.spawn>,
+        };
+      };
+      const runner = new CliRunner({
+        env,
+        isStdinTTY: true,
+        isStdoutTTY: true,
+        cwd: "/test",
+        runCommandFn,
+      });
+
+      const result = await runner.run([
+        "node",
+        "md",
+        "/test/interactive.md",
+        "--_interactive",
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(captured?.interactive).toBe(true);
+      expect(captured?.captureOutput).toBe(false);
+      expect(captured?.captureStderr).toBe(false);
+      expect(captured?.args).not.toContain("exec");
+      expect(captured?.args).not.toContain("--ephemeral");
+      expect(captured?.args).not.toContain("--ignore-user-config");
     });
   });
 

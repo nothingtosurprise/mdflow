@@ -1,5 +1,5 @@
 import { expect, test, describe, spyOn, beforeEach, afterEach } from "bun:test";
-import { parseCommandFromFilename, resolveCommand, resolveEngine, DEFAULT_ENGINE, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, runCommand, type CaptureMode } from "./command";
+import { parseCommandFromFilename, resolveCommand, resolveEngine, DEFAULT_ENGINE, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, resolveCommandStdio, runCommand, type CaptureMode } from "./command";
 import type { AgentFrontmatter } from "./types";
 import { CommandError } from "./errors";
 
@@ -34,6 +34,34 @@ describe("resolveCommand", () => {
 
   test("falls back to the default engine instead of throwing (v3)", () => {
     expect(resolveCommand("task.md")).toBe(DEFAULT_ENGINE);
+  });
+});
+
+describe("resolveCommandStdio", () => {
+  test("interactive engines inherit every terminal stream even when capture was requested", () => {
+    expect(resolveCommandStdio({
+      mode: "tee",
+      captureStderr: true,
+      spinnerActive: true,
+      interactive: true,
+    })).toEqual({
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+  });
+
+  test("one-shot engines retain tee capture behavior", () => {
+    expect(resolveCommandStdio({
+      mode: "tee",
+      captureStderr: true,
+      spinnerActive: false,
+      interactive: false,
+    })).toEqual({
+      stdin: "inherit",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
   });
 });
 
