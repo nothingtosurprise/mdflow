@@ -6,32 +6,29 @@ import { TerminalLine } from '../types';
 import { ShieldCheck, Scale, Database, FileLock2, Bug, GitBranch, ArrowRight } from 'lucide-react';
 
 /**
- * The auto-evolve section: the hero promises "MARKDOWN AGENTS THAT EVOLVE" —
- * this is where the promise becomes mechanism. The terminal replays a real
- * session (claude as maintainer, recorded during verification): the gate
- * refusing an unproven suite, the suite earning lastCleanAt, and a normal
- * run triggering a gated, measured, applied evolution.
+ * Proposal-first evolution: feedback becomes a private, measured change with
+ * an explicit review/apply boundary.
  */
 
 const TRANSCRIPT: TerminalLine[] = [
-    { id: 'e1', type: 'input', content: 'md evolve flows/answer.md --check --auto' },
-    { id: 'e2', type: 'error', content: 'no evolution: auto requires a trust-ledger lastCleanAt —' },
-    { id: 'e3', type: 'error', content: 'machine diffs never auto-apply to an unproven suite.' },
-    { id: 'e4', type: 'info', content: '  complaint: "way too verbose - I just want the one word"' },
-    { id: 'e5', type: 'input', content: 'md eval flows/answer.md' },
-    { id: 'e6', type: 'output', content: '✓ answers green — clean run recorded in trust ledger' },
-    { id: 'e7', type: 'input', content: 'md flows/answer.md    # just a normal run' },
-    { id: 'e8', type: 'output', content: 'The team color is GREEN. …' },
-    { id: 'e9', type: 'info', content: 'evolve: auto — 1 complaint since last evolution' },
-    { id: 'e10', type: 'info', content: 'evolve: auto — cost: 1 maintainer + 2 eval turns = 3 turns' },
-    { id: 'e11', type: 'info', content: 'evolve: auto — baseline ✓ 1/1 · drafting candidate…' },
-    { id: 'e12', type: 'info', content: 'evolve: auto — benefit: ancestor 1/1 → candidate 1/1' },
-    { id: 'e13', type: 'output', content: 'evolve: auto — applied. Review with: git diff flows/answer.md' },
+    { id: 'e1', type: 'input', content: 'md feedback flows/answer.md "too verbose — one word"' },
+    { id: 'e2', type: 'output', content: 'Feedback fb_01J… saved — status: open, not yet proved' },
+    { id: 'e3', type: 'input', content: 'md feedback distill fb_01J…' },
+    { id: 'e4', type: 'info', content: 'private eval draft created — deliberately failing until reviewed' },
+    { id: 'e5', type: 'input', content: 'md evolve plan flows/answer.md' },
+    { id: 'e6', type: 'output', content: 'Cost  3 invocations · Writes  private artifact only' },
+    { id: 'e7', type: 'output', content: 'Safety  no new command/import capabilities allowed' },
+    { id: 'e8', type: 'input', content: 'md evolve propose flows/answer.md --yes' },
+    { id: 'e9', type: 'info', content: 'current ✗ 0/1 · proposal ✓ 1/1 · capability delta none' },
+    { id: 'e10', type: 'output', content: 'VERIFIED IMPROVEMENT — source unchanged — evr_01J…' },
+    { id: 'e11', type: 'input', content: 'md evolve show evr_01J…' },
+    { id: 'e12', type: 'info', content: 'review prompt diff, receipt, and planned/actual cost' },
+    { id: 'e13', type: 'input', content: 'md evolve apply evr_01J…   # separate decision' },
 ];
 
 const DIFF_CONTENT = `---
 description: answer the team color question
-evolve: auto              # opt into the loop
+evolve: suggest           # notify; never spend or apply
 ---
 - Think step by step about the team color.
 - Explain your reasoning in a few sentences
@@ -45,33 +42,33 @@ evolve: auto              # opt into the loop
 const GUARANTEES = [
     {
         icon: ShieldCheck,
-        title: 'Gated on proof',
-        body: 'No eval suite, no evolution. Auto mode goes further: machine diffs only auto-apply once the trust ledger holds a lastCleanAt — proof the suite has passed clean.',
+        title: 'Claims match proof',
+        body: '“Verified improvement” requires a feedback-linked red/green case. A clean uncovered change is labeled regression-safe, never “fixed.”',
     },
     {
         icon: Scale,
-        title: 'Regression is measured',
-        body: 'The ancestor is scored on its own suite first. The candidate must come back clean and no worse — or it reverts byte-identical and parks as <flow>.pending.md. A complaint is measured only when an eval covers it.',
+        title: 'Canonical source stays still',
+        body: 'Current and proposal run from separate off-path snapshots. Drafting and verification never expose a half-gated candidate at the real flow path.',
     },
     {
         icon: Database,
-        title: 'Real usage only',
-        body: 'Eval runs execute in isolated temporary workspaces with the telemetry corpus redirected. These are test fixtures, not host security sandboxes. Synthetic runs can never trigger an evolution.',
+        title: 'Evidence is durable',
+        body: 'Stable feedback IDs move through open, targeted, resolved, or dismissed. Rejection and infrastructure failures leave the reported problem open.',
     },
     {
         icon: FileLock2,
-        title: 'Prompt-only mutation',
-        body: 'The maintainer redrafts the body; frontmatter is frozen byte-for-byte. A drafted diff cannot touch config, flags, or permissions — the mutation surface is prose.',
+        title: 'Capabilities cannot sneak in',
+        body: 'The prompt body may change, but new commands, executable fences, URLs, providers, globs, or broader file access are blocked before candidate execution.',
     },
     {
         icon: Bug,
-        title: 'Hostile output handled',
-        body: 'Exactly one fenced block with the closing fence on its own line, or nothing is written. Interrupted mid-gate? The original auto-restores from backup.',
+        title: 'Proof is content-bound',
+        body: 'Receipts bind flow imports, suite code, merged config, engine/model, mdflow version, and cases. Timeouts and flakes are inconclusive, not passes.',
     },
     {
         icon: GitBranch,
-        title: 'Never commits',
-        body: 'Acceptance ends by pointing at git diff. You review every evolution like any other change to your repo — because it is one.',
+        title: 'Apply is transactional',
+        body: 'Review first. Explicit apply uses a per-flow lock, hash compare-and-swap, atomic writes, lineage, and a hash-guarded rollback command.',
     },
 ];
 
@@ -89,16 +86,15 @@ export const Evolve: React.FC = () => {
                     transition={{ duration: 0.6 }}
                     className="text-center mb-6"
                 >
-                    <p className="font-mono text-xs uppercase tracking-[0.3em] text-emerald-400 mb-4">evolve: auto</p>
+                    <p className="font-mono text-xs uppercase tracking-[0.3em] text-emerald-400 mb-4">change with proof</p>
                     <h2 className="select-none font-display font-bold text-4xl md:text-6xl tracking-tighter text-white">
-                        COMPLAINTS IN.<br />
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-200 to-white">GATED DIFFS OUT.</span>
+                        FEEDBACK IN.<br />
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-200 to-white">REVIEWABLE PROOF OUT.</span>
                     </h2>
                     <p className="mt-6 text-lg text-zinc-400 max-w-3xl mx-auto font-light leading-relaxed">
-                        Tell a flow what went wrong — <span className="text-white font-mono text-base">md complain</span>,
-                        or just re-run it within two minutes and mdflow takes the hint. A maintainer engine redrafts
-                        the prompt, the eval suite judges the result, and only a suite-clean, no-regression revision
-                        lands in your working tree.
+                        Tell a flow what went wrong with <span className="text-white font-mono text-base">md feedback</span>.
+                        mdflow drafts a private prompt proposal, checks its capability delta, and measures current
+                        versus candidate behavior. Your working tree does not change until you explicitly apply a reviewed run.
                     </p>
                 </motion.div>
 
@@ -109,9 +105,8 @@ export const Evolve: React.FC = () => {
                     transition={{ delay: 0.2, duration: 0.6 }}
                     className="text-center text-sm text-zinc-500 max-w-2xl mx-auto mb-16 font-light leading-relaxed"
                 >
-                    evidence → decision → draft → gate → diff. Every arrow is refusable: no suite, no fresh
-                    evidence, no proven-clean history — no evolution, zero turns spent.
-                    <span className="text-zinc-400"> Cost is printed before it is spent.</span>
+                    feedback → reviewed eval → plan → proposal → proof → review → apply. Every transition has
+                    stable status and reason codes. <span className="text-zinc-400">Cost and writes are printed before paid work begins.</span>
                 </motion.p>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch mb-16">
@@ -122,7 +117,7 @@ export const Evolve: React.FC = () => {
                         transition={{ duration: 0.5 }}
                         className="rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden"
                     >
-                        <Editor filename="flows/answer.md — one evolution, reviewed in git" content={DIFF_CONTENT} />
+                        <Editor filename="proposal.diff — private; source unchanged" content={DIFF_CONTENT} />
                     </motion.div>
 
                     <motion.div
@@ -132,7 +127,7 @@ export const Evolve: React.FC = () => {
                         transition={{ duration: 0.5 }}
                         className="min-h-[380px]"
                     >
-                        <Terminal lines={TRANSCRIPT} title="a real session — claude as maintainer" isLive />
+                        <Terminal lines={TRANSCRIPT} title="proposal-first evolution" isLive />
                     </motion.div>
                 </div>
 
@@ -161,7 +156,7 @@ export const Evolve: React.FC = () => {
                     className="flex flex-col sm:flex-row items-center justify-center gap-6 text-sm"
                 >
                     <div className="font-mono text-zinc-400 bg-white/5 border border-white/10 rounded-lg px-4 py-2.5">
-                        <span className="text-emerald-400">$</span> md complain flows/review.md <span className="text-zinc-500">"missed the race condition"</span>
+                        <span className="text-emerald-400">$</span> md feedback flows/review.md <span className="text-zinc-500">"missed the race condition"</span>
                     </div>
                     <a
                         href="/evolve-deep-dive/"
@@ -169,7 +164,7 @@ export const Evolve: React.FC = () => {
                         rel="noopener noreferrer"
                         className="group flex items-center gap-2 text-emerald-300 hover:text-emerald-200 transition-colors font-medium"
                     >
-                        Read the full deep dive: how every guarantee is verified
+                        Read the protocol: evidence, proof, review, rollback
                         <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" />
                     </a>
                 </motion.div>

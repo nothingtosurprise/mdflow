@@ -22,7 +22,7 @@ import {
 
 /** Result from the failure menu */
 export interface FailureMenuResult {
-  action: "retry" | "fix" | "quit";
+  action: "retry" | "fix" | "report" | "quit";
 }
 
 /** Menu option */
@@ -90,6 +90,7 @@ export const failureMenu = createPrompt<FailureMenuResult, FailureMenuConfig>(
     const options: MenuOption[] = [
       { key: "r", label: "Retry - run the same command again", action: "retry" },
       { key: "f", label: "Fix with AI - feed error back and retry", action: "fix" },
+      { key: "p", label: "Report this failure as feedback", action: "report" },
       { key: "q", label: "Quit - exit with error code", action: "quit" },
     ];
 
@@ -124,6 +125,10 @@ export const failureMenu = createPrompt<FailureMenuResult, FailureMenuConfig>(
       }
       if (key.name === "f") {
         done({ action: "fix" });
+        return;
+      }
+      if (key.name === "p") {
+        done({ action: "report" });
         return;
       }
     });

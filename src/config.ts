@@ -447,6 +447,10 @@ function deepCloneConfig(config: GlobalConfig): GlobalConfig {
     result.engine = config.engine;
   }
 
+  if (config.evolve !== undefined) {
+    result.evolve = structuredClone(config.evolve);
+  }
+
   if (config.commands) {
     result.commands = {};
     for (const [cmd, defaults] of Object.entries(config.commands)) {
@@ -467,6 +471,10 @@ export function mergeConfigs(base: GlobalConfig, override: GlobalConfig): Global
 
   if (override.engine !== undefined) {
     result.engine = override.engine;
+  }
+
+  if (override.evolve !== undefined) {
+    result.evolve = structuredClone(override.evolve);
   }
 
   if (override.commands) {

@@ -150,12 +150,13 @@ export const ManPage: React.FC = () => {
                 </div>
                 <div className="bg-[#050505] p-6 rounded-lg border border-zinc-800 shadow-inner group hover:border-emerald-500/30 transition-colors">
                   <p className="text-zinc-500 mb-2 text-xs uppercase tracking-wider"># Prove a flow's behavior</p>
-                  <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-emerald-400">eval</span> review.md</p>
+                  <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-emerald-400">eval</span> review.md <span className="text-zinc-400">--plan</span></p>
                 </div>
                 <div className="bg-[#050505] p-6 rounded-lg border border-zinc-800 shadow-inner group hover:border-amber-500/30 transition-colors">
-                  <p className="text-zinc-500 mb-2 text-xs uppercase tracking-wider"># File evidence, then evolve the prompt (gated by the eval suite)</p>
-                  <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-amber-400">complain</span> review.md <span className="text-zinc-400">"misses renamed files"</span></p>
-                  <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-amber-400">evolve</span> review.md</p>
+                  <p className="text-zinc-500 mb-2 text-xs uppercase tracking-wider"># Evidence → private proposal → explicit review</p>
+                  <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-amber-400">feedback</span> review.md <span className="text-zinc-400">"misses renamed files"</span></p>
+                  <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-amber-400">evolve plan</span> review.md</p>
+                  <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-amber-400">evolve propose</span> review.md</p>
                 </div>
               </div>
             </div>

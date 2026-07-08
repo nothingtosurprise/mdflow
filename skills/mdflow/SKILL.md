@@ -23,8 +23,9 @@ Review this diff for bugs. Be terse, cite file:line.
 !`git diff --cached`
 ```
 
-**Every real run costs one engine turn.** Say so before running flows for
-the user. Dry runs are free.
+**Every real run launches a paid flow invocation.** Provider turns, tokens,
+tool calls, and currency vary by engine and task. Say what is known before
+running flows for the user. Dry runs are free.
 
 ## Step 0: is mdflow installed? (free)
 
@@ -42,7 +43,7 @@ flows/
 ├── review.md          # one markdown agent per job
 ├── review.eval.ts     # colocated proof
 └── ...
-.mdflow.yaml           # project config: engine: <default for this repo>
+.mdflow.yaml           # project engine + evolve.mode: suggest
 ```
 
 Rules:
@@ -52,8 +53,8 @@ Rules:
 2. Every flow gets `description:` frontmatter. Frontmatter is what marks a
    file as a flow instead of a document.
 3. Every production flow gets a colocated `<name>.eval.ts` before it is
-   trusted or evolved. The deterministic starter scaffold does not invent
-   project-specific proof; add the eval immediately after tailoring the flow.
+   trusted or evolved. The deterministic starter scaffold creates a generic
+   smoke guardrail; replace it with project-specific proof while tailoring.
    The creed: if a guardrail isn't covered by an eval, it's a wish.
 4. Keep `flows/README.md` current. It's the index your future self and other
    agents read first.
@@ -118,13 +119,51 @@ export default cases;
 ```
 
 `md eval flows/review.md` runs each case in an isolated temp workspace and records
-results in the trust ledger (`~/.mdflow/eval-results.json`). It prints the
-cost (one engine turn per case) before running; get the user's go-ahead.
+content-bound receipts in the trust ledger (`~/.mdflow/eval-results.json`). Run
+`md eval flows/review.md --plan` first; repetitions affect the paid invocation
+count. Keep the default case array statically resolvable so planning can inspect
+names/cost without importing executable suite code. An actual run requires interactive confirmation or `--yes`, so get the
+user's go-ahead.
 Check invariants (files, numbers, names), not exact wording. When a real run
-disappoints, write the failing eval case first, then edit the flow until
-`md eval` passes. The workspace isolation is not a network, process, or
+disappoints, record it with `md feedback`, then add a feedback-linked case.
+Nonzero exits fail by default, timeouts are inconclusive, and mixed repeated
+trials are flaky rather than clean. The workspace isolation is not a network, process, or
 credential sandbox; the selected engine still receives the environment and
 capabilities its adapter allows.
+
+## Feedback and proposal-first evolution
+
+Never describe Evolve as self-editing or auto-applying. Follow this sequence:
+
+```bash
+md feedback flows/review.md "missed the renamed-file regression"
+md feedback show <feedback-id>
+md feedback distill <feedback-id>   # private, deliberately failing draft
+md eval flows/review.md --plan
+md evolve plan flows/review.md      # free; shows proof, capabilities, cost, writes
+md evolve propose flows/review.md   # paid only after consent
+md evolve show <run-id>             # inspect decision and prompt/capability diff
+md evolve apply <run-id>            # separate explicit source mutation
+```
+
+Review generated eval code before copying it into a suite: evals are executable
+TypeScript. Set `evidence: ["fb_..."]` on a case that reproduces the report.
+Only current-fail/proposal-pass on such a case is a verified improvement. A
+green uncovered candidate is only regression-safe.
+
+Proposals and receipts are private/off-path; the canonical flow remains
+byte-identical until explicit apply. New command/import/network/file capabilities
+are blocked before candidate execution. `evolve: auto` is a compatibility alias
+for queued proposal-only work. Prefer this project default:
+
+```yaml
+engine: <confirmed engine>
+evolve:
+  mode: suggest
+```
+
+`--no-evolve` or `MDFLOW_EVOLVE=off` disables post-run handling. Do not enable
+unattended apply: it is intentionally not available.
 
 ## Workflow for "add an agent for X"
 
@@ -137,8 +176,8 @@ capabilities its adapter allows.
    context-provider imports may still resolve. Report the size.
 4. Write `flows/<job>.eval.ts` with 1 to 3 behavioral cases.
 5. Update `flows/README.md`.
-6. Offer the paid steps: `md flows/<job>.md` (one turn) and
-   `md eval flows/<job>.md` (one turn per case).
+6. Show `md eval flows/<job>.md --plan`, then offer the separate paid flow and
+   eval runs. Never infer consent for one from consent for the other.
 
 ## Migrating v2 files
 

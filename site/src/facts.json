@@ -60,18 +60,23 @@
     },
     {
       "name": "eval",
-      "usage": "eval <flow.md>",
-      "description": "run the flow's eval suite — costs engine turns"
+      "usage": "eval <flow.md> [--plan]",
+      "description": "run or cost-preview the executable eval suite"
+    },
+    {
+      "name": "feedback",
+      "usage": "feedback <flow.md> \"msg\"",
+      "description": "record durable feedback with a stable ID (free)"
     },
     {
       "name": "complain",
       "usage": "complain <flow.md> \"msg\"",
-      "description": "record evolution evidence (free)"
+      "description": "alias for feedback"
     },
     {
       "name": "evolve",
-      "usage": "evolve <flow.md> [--check]",
-      "description": "evidence-gated prompt evolution; --check is free"
+      "usage": "evolve plan|propose <flow.md>",
+      "description": "plan or create a capability-checked off-path proposal"
     },
     {
       "name": "install",
@@ -128,6 +133,10 @@
     {
       "flag": "--json",
       "description": "single JSON result object"
+    },
+    {
+      "flag": "--no-evolve",
+      "description": "disable post-run evolution handling for this run"
     }
   ]
 }

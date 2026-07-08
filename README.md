@@ -18,14 +18,14 @@ Your agent CLI (claude, codex, copilot, ...) opens pre-loaded with the mdflow
 setup guide: it reads your repo, proposes flows tailored to it, writes
 `./flows` + `.mdflow.yaml` once you approve, and verifies everything with free
 dry runs. No agent CLI handy — or scripting it? `npx mdflow init --yes`
-scaffolds the starter roster with zero engine turns.
+scaffolds the starter roster with zero engine invocations.
 
 ---
 
 ## The agent control plane in your repo
 
 **Git-native agent workflows.** One file per job. Any engine. Evals that
-guard declared behavior. Complaints can drive regression-gated prompt revisions.
+guard declared behavior. Feedback can drive reviewable, regression-gated prompt proposals.
 
 - **`./flows` is your repo's agent roster.** One markdown agent per job:
   code review, release notes, issue triage. Diffable in PRs, checked with
@@ -65,16 +65,18 @@ guard declared behavior. Complaints can drive regression-gated prompt revisions.
   Behavioral cases in isolated temporary workspaces, cost printed before running,
   results in a trust ledger. *If a guardrail isn't covered by an eval, it's
   a wish.*
-- **Evolution:** `md complain flows/review.md "missed the race condition"`
-  records evidence; `md evolve` has a maintainer engine redraft the prompt
-  and applies it only if the eval suite scores clean and no worse than the
-  ancestor's baseline. Add `evolve: auto` to frontmatter for the full loop —
-  gated on a proven-clean suite (`lastCleanAt`), never auto-applying to an
-  unproven one. The gate measures suite regressions; a complaint becomes a
-  measured improvement only after it is represented by an eval case.
+- **Evolution is proposal-first:** `md feedback flows/review.md "missed the
+  race condition"` records durable evidence. `md evolve plan` previews proof,
+  capabilities, writes, and bounded invocation cost for free; `md evolve
+  propose` drafts and evaluates private off-path snapshots. The source stays
+  byte-identical until a separate `md evolve apply <run-id>`. mdflow says
+  “verified improvement” only when a feedback-linked case fails on current and
+  passes on the proposal; otherwise a green candidate is merely
+  “regression-safe.” Legacy `evolve: auto` now means queued proposal-only work,
+  never unattended application.
 
-See `docs/V3-FLOWS.md` for the historical v3 design record and roadmap (distill,
-tournament, routing), [`docs/public-api.md`](docs/public-api.md) for the
+See [`docs/evolve.md`](docs/evolve.md) for the normative change-with-proof
+protocol, `docs/V3-FLOWS.md` for the historical v3 design record, [`docs/public-api.md`](docs/public-api.md) for the
 stable CLI contract, and [`GUIDE-NEW-FEATURES.md`](GUIDE-NEW-FEATURES.md) for
 workflows (`_steps`), structured outputs (`_output`), context providers
 (`@git:diff`), the flow registry, `--json` mode, and run telemetry.
@@ -733,9 +735,11 @@ Commands:
                                 (guided by an installed agent CLI; -y scaffolds)
   md create [name] [flags]      Create a new agent file
   md explain <agent.md>         Show resolved config without executing
-  md eval <flow.md>             Run the flow's eval suite (<flow>.eval.ts) — costs engine turns
-  md complain <flow.md> "msg"   Record evolution evidence for a flow (free)
-  md evolve <flow.md> [--check] Evidence-gated prompt evolution; --check is free
+  md eval <flow.md> [--plan]    Run or cost-preview the flow's eval suite
+  md feedback <flow.md> "msg"   Record durable evolution evidence (free)
+  md complain <flow.md> "msg"   Alias for md feedback
+  md evolve plan|propose <flow> Plan for free or create a private proposal
+  md evolve show|apply <run-id> Review or explicitly apply a proposal
   md install <url|gh:...@ref>   Install a flow into the registry (--global for user scope)
   md remove <name>              Remove an installed registry flow
   md list                       List installed registry flows

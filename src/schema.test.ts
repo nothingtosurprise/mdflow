@@ -54,6 +54,22 @@ describe("validateFrontmatter", () => {
     expect((result as any)["dangerously-skip-permissions"]).toBe(true);
     expect((result as any)["mcp-config"]).toBe("./mcp.json");
   });
+
+  test("validates an explicit evolution policy", () => {
+    const result = validateFrontmatter({
+      evolve: {
+        mode: "propose",
+        triggers: ["explicit-feedback"],
+        budget: { "max-invocations": 7, "cooldown-ms": 60_000 },
+        gate: { "require-feedback-eval": true, "allow-capability-delta": false },
+      },
+    });
+    expect(result.evolve).toMatchObject({ mode: "propose" });
+  });
+
+  test("rejects misspelled evolution modes instead of silently doing nothing", () => {
+    expect(() => validateFrontmatter({ evolve: "autp" })).toThrow("Invalid frontmatter");
+  });
 });
 
 describe("safeParseFrontmatter", () => {
@@ -95,6 +111,11 @@ describe("validateConfig", () => {
     expect(result.commands?.claude?.model).toBe("opus");
     expect(result.commands?.claude?.print).toBe(true);
     expect(result.commands?.gemini?.model).toBe("pro");
+  });
+
+  test("validates a project-level evolution policy", () => {
+    const result = validateConfig({ evolve: { mode: "propose", budget: { "max-invocations": 5 } } });
+    expect(result.evolve).toMatchObject({ mode: "propose" });
   });
 
   test("validates config with positional mappings", () => {

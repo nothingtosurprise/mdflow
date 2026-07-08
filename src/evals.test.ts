@@ -4,7 +4,7 @@
  */
 
 import { expect, test, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -12,6 +12,9 @@ import {
   runEvalSuite,
   recordEvalResult,
   readEvalLedger,
+  isVerificationCurrent,
+  getEvalLedgerEntry,
+  buildVerificationFingerprint,
   type EvalCase,
   type FlowRunner,
 } from "./evals";
@@ -144,9 +147,144 @@ describe("runEvalSuite", () => {
     expect(seen?.stdin).toBe("{}");
     expect(seen?.cwd).toContain("mdflow-eval-");
   });
+
+  test("non-zero exits fail by default before a permissive check can pass", async () => {
+    const outcome = await runEvalSuite({
+      flowPath: "fake.md",
+      cases: [{ name: "crashed", check: () => null }],
+      runFlow: async () => ({ stdout: "looks fine", stderr: "boom", exitCode: 42 }),
+      log: () => {},
+      noLedger: true,
+    });
+    expect(outcome.pass).toBe(0);
+    expect(outcome.fail).toBe(1);
+    expect(outcome.cases[0]).toMatchObject({ status: "fail", exitCode: 42 });
+  });
+
+  test("classified provider/auth/environment exits are inconclusive, not behavioral failures", async () => {
+    const outcome = await runEvalSuite({
+      flowPath: "fake.md",
+      cases: [{ name: "provider unavailable", check: () => null }],
+      runFlow: async () => ({ stdout: "", stderr: "429 rate limit", exitCode: 1, failureClass: "provider" }),
+      log: () => {},
+      noLedger: true,
+    });
+    expect(outcome.fail).toBe(0);
+    expect(outcome.inconclusive).toBe(1);
+    expect(outcome.cases[0]?.trials[0]).toMatchObject({ status: "inconclusive", failureClass: "provider" });
+  });
+
+  test("allowNonZero is an explicit case-level escape hatch", async () => {
+    const outcome = await runEvalSuite({
+      flowPath: "fake.md",
+      cases: [{ name: "expected nonzero", allowNonZero: true, check: ({ exitCode }) => exitCode === 2 ? null : "wrong exit" }],
+      runFlow: async () => ({ stdout: "", stderr: "", exitCode: 2 }),
+      log: () => {},
+      noLedger: true,
+    });
+    expect(outcome.pass).toBe(1);
+  });
+
+  test("timeouts are inconclusive, never passing behavior", async () => {
+    const outcome = await runEvalSuite({
+      flowPath: "fake.md",
+      cases: [{ name: "hangs", timeoutMs: 5, check: () => null }],
+      runFlow: async () => ({ stdout: "", stderr: "", exitCode: 143, timedOut: true }),
+      log: () => {},
+      noLedger: true,
+    });
+    expect(outcome.inconclusive).toBe(1);
+    expect(outcome.cases[0]?.status).toBe("inconclusive");
+  });
+
+  test("repetitions run independently and report their exact invocation count", async () => {
+    let invocations = 0;
+    const outcome = await runEvalSuite({
+      flowPath: "fake.md",
+      cases: [{ name: "three trials", repetitions: 3, check: () => null }],
+      runFlow: async () => {
+        invocations++;
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+      log: () => {},
+      noLedger: true,
+    });
+    expect(invocations).toBe(3);
+    expect(outcome.invocations).toBe(3);
+    expect(outcome.cases[0]).toMatchObject({ repetitions: 3, quorum: 3, passCount: 3, flaky: false });
+  });
+
+  test("mixed quorum results are flagged as flaky and cannot become clean proof", async () => {
+    let trial = 0;
+    const outcome = await runEvalSuite({
+      flowPath: "fake.md",
+      cases: [{ name: "variable", kind: "stochastic", repetitions: 3, quorum: 2, check: ({ stdout }) => stdout === "pass" ? null : "variance" }],
+      runFlow: async () => ({ stdout: ++trial === 2 ? "fail" : "pass", stderr: "", exitCode: 0 }),
+      log: () => {},
+      noLedger: true,
+    });
+    expect(outcome.pass).toBe(1);
+    expect(outcome.flaky).toBe(1);
+    expect(outcome.cases[0]).toMatchObject({ status: "pass", passCount: 2, flaky: true });
+  });
+
+  test("invalid repetition policies fail before spending an invocation", async () => {
+    let invocations = 0;
+    const outcome = await runEvalSuite({
+      flowPath: "fake.md",
+      cases: [{ name: "invalid", repetitions: 2, quorum: 3, check: () => null }],
+      runFlow: async () => { invocations++; return { stdout: "", stderr: "", exitCode: 0 }; },
+      log: () => {},
+      noLedger: true,
+    });
+    expect(invocations).toBe(0);
+    expect(outcome.fail).toBe(1);
+  });
 });
 
 describe("runEvalCli guardrails", () => {
+  test("JSON plan is one machine-readable object with repetition-aware cost", async () => {
+    const { runEvalCli } = await import("./evals");
+    const flow = join(tempDir, "repeat.md");
+    writeFileSync(flow, "---\nengine: echo\nevolve:\n  mode: suggest\n  gate:\n    repetitions: 3\n---\nbody\n");
+    writeFileSync(join(tempDir, "repeat.eval.ts"), `export default [{ name: "repeat", check: () => null }];\n`);
+    const prior = console.log;
+    const output: string[] = [];
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      expect(await runEvalCli([flow, "--plan", "--json"])).toBe(0);
+    } finally {
+      console.log = prior;
+    }
+    expect(output).toHaveLength(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ type: "eval.plan", selectedCount: 1, plannedInvocations: 3 });
+  });
+
+  test("plan and pre-consent refusal never execute suite top-level code", async () => {
+    const { runEvalCli } = await import("./evals");
+    const flow = join(tempDir, "untrusted.md");
+    const marker = join(tempDir, "suite-executed.txt");
+    writeFileSync(flow, "---\nengine: echo\n---\nbody\n");
+    writeFileSync(join(tempDir, "untrusted.eval.ts"), `
+      import { writeFileSync } from "node:fs";
+      writeFileSync(${JSON.stringify(marker)}, "executed");
+      export default [{ name: "static case", check: () => null }];
+    `);
+    const prior = console.log;
+    const priorError = console.error;
+    console.log = () => {};
+    console.error = () => {};
+    try {
+      expect(await runEvalCli([flow, "--plan"])).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      expect(await runEvalCli([flow])).toBe(1);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      console.log = prior;
+      console.error = priorError;
+    }
+  });
+
   test("a filter matching zero cases exits 1 instead of reporting a hollow pass", async () => {
     const { runEvalCli } = await import("./evals");
     const flow = join(tempDir, "guard.md");
@@ -187,12 +325,23 @@ describe("runEvalCli guardrails", () => {
 });
 
 describe("trust ledger", () => {
-  test("full clean run stamps lastCleanAt; later failure preserves it", () => {
+  test("full clean run keeps historical lastCleanAt but a later failure invalidates current-clean state", () => {
     const ledger = join(tempDir, "eval-results.json");
+    const verification = {
+      fingerprint: "fingerprint",
+      flowHash: "flow",
+      suiteHash: "suite",
+      configHash: "config",
+      mdflowVersion: "test",
+      engine: "test",
+      engineSource: "frontmatter",
+      caseIds: ["case"],
+      createdAt: "2026-07-04T00:00:00Z",
+    };
 
     recordEvalResult(
       "flows/jq.eval.ts",
-      { flow: "flows/jq.md", pass: 2, fail: 0, total: 2, lastRunAt: "2026-07-04T00:00:00Z", full: true },
+      { flow: "flows/jq.md", pass: 2, fail: 0, total: 2, lastRunAt: "2026-07-04T00:00:00Z", full: true, verification },
       ledger
     );
     let entry = readEvalLedger(ledger)["flows/jq.eval.ts"]!;
@@ -206,6 +355,7 @@ describe("trust ledger", () => {
     entry = readEvalLedger(ledger)["flows/jq.eval.ts"]!;
     expect(entry.fail).toBe(1);
     expect(entry.lastCleanAt).toBe("2026-07-04T00:00:00Z");
+    expect(entry.currentClean).toBe(false);
   });
 
   test("filtered runs never stamp lastCleanAt", () => {
@@ -218,21 +368,89 @@ describe("trust ledger", () => {
     expect(readEvalLedger(ledger)["flows/x.eval.ts"]!.lastCleanAt).toBeUndefined();
   });
 
+  test("a concurrent ledger writer gets a clear busy result instead of a lost update", () => {
+    const ledger = join(tempDir, "busy-ledger.json");
+    writeFileSync(`${ledger}.lock`, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+    expect(() => recordEvalResult(
+      "flows/x.eval.ts",
+      { flow: "flows/x.md", pass: 0, fail: 1, total: 1, lastRunAt: new Date().toISOString(), full: true },
+      ledger
+    )).toThrow("State file is busy");
+    expect(existsSync(ledger)).toBe(false);
+  });
+
   test("ledger write goes through runEvalSuite with suiteKey and ledgerPath", async () => {
     const ledger = join(tempDir, "suite-ledger.json");
+    const flow = join(tempDir, "fake.md");
+    const suite = join(tempDir, "fake.eval.ts");
+    writeFileSync(flow, "---\ndescription: test\n---\nbody\n");
+    writeFileSync(suite, "export default [];\n");
+    const cases: EvalCase[] = [{ name: "ok", check: () => null }];
     await runEvalSuite({
-      flowPath: "fake.md",
-      cases: [{ name: "ok", check: () => null }],
+      flowPath: flow,
+      cases,
       runFlow: okRunner,
       log: () => {},
-      suiteKey: "suites/fake.eval.ts",
+      suiteKey: suite,
       ledgerPath: ledger,
     });
 
-    const entry = readEvalLedger(ledger)["suites/fake.eval.ts"]!;
+    const entry = getEvalLedgerEntry(suite, readEvalLedger(ledger))!;
     expect(entry.pass).toBe(1);
     expect(entry.full).toBe(true);
     expect(entry.lastCleanAt).toBeDefined();
+    expect(entry.currentClean).toBe(true);
+    expect(await isVerificationCurrent(flow, suite, cases, entry)).toBe(true);
+    writeFileSync(flow, "---\ndescription: test\n---\nchanged\n");
+    expect(await isVerificationCurrent(flow, suite, cases, entry)).toBe(false);
+  });
+
+  test("verification invalidates when a flow import changes", async () => {
+    const ledger = join(tempDir, "import-ledger.json");
+    const flow = join(tempDir, "importer.md");
+    const context = join(tempDir, "context.txt");
+    const suite = join(tempDir, "importer.eval.ts");
+    writeFileSync(context, "first");
+    writeFileSync(flow, "---\ndescription: test\n---\nUse @./context.txt\n");
+    writeFileSync(suite, "export default [];\n");
+    const cases: EvalCase[] = [{ name: "ok", check: () => null }];
+    await runEvalSuite({ flowPath: flow, cases, runFlow: okRunner, log: () => {}, suiteKey: suite, ledgerPath: ledger });
+    const entry = getEvalLedgerEntry(suite, readEvalLedger(ledger))!;
+    expect(await isVerificationCurrent(flow, suite, cases, entry)).toBe(true);
+    writeFileSync(context, "second");
+    expect(await isVerificationCurrent(flow, suite, cases, entry)).toBe(false);
+  });
+
+  test("equivalent checkouts produce the same content receipt", async () => {
+    const cases: EvalCase[] = [{ name: "ok", repetitions: 2, quorum: 2, check: () => null }];
+    const fingerprints = [];
+    const checkouts: Array<{ flow: string; suite: string }> = [];
+    for (const name of ["checkout-a", "checkout-b"]) {
+      const root = join(tempDir, name);
+      const flows = join(root, "flows");
+      mkdirSync(flows, { recursive: true });
+      writeFileSync(join(root, ".git"), "test marker");
+      writeFileSync(join(root, "context.txt"), "same context");
+      const flow = join(flows, "review.md");
+      const suite = join(flows, "review.eval.ts");
+      writeFileSync(flow, "---\n_flow_id: flow_shared_checkout\nengine: echo\n---\nReview @../context.txt\n");
+      writeFileSync(suite, "export default [];\n");
+      fingerprints.push(await buildVerificationFingerprint(flow, suite, cases));
+      checkouts.push({ flow, suite });
+    }
+    expect(fingerprints[0]?.fingerprint).toBe(fingerprints[1]?.fingerprint);
+    const ledger = join(tempDir, "relocated-ledger.json");
+    await runEvalSuite({
+      flowPath: checkouts[0]!.flow,
+      cases,
+      runFlow: okRunner,
+      suiteKey: checkouts[0]!.suite,
+      ledgerPath: ledger,
+      log: () => {},
+    });
+    const movedEntry = getEvalLedgerEntry(checkouts[1]!.suite, readEvalLedger(ledger));
+    expect(movedEntry?.flowId).toBe("flow_shared_checkout");
+    expect(await isVerificationCurrent(checkouts[1]!.flow, checkouts[1]!.suite, cases, movedEntry)).toBe(true);
   });
 });
 

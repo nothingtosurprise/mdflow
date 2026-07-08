@@ -43,6 +43,7 @@ export interface PostRunMenuResult {
   | "save-json"
   | "apply-patch"
   | "run-command"
+  | "feedback"
   | "exit";
   /** For save action: the filename to save to */
   filename?: string;
@@ -186,6 +187,7 @@ export const postRunMenu = createPrompt<PostRunMenuResult, PostRunMenuConfig>(
     const options: MenuOption[] = [
       { key: "c", label: "Copy output to clipboard", action: "copy" },
       { key: "s", label: "Save output to file...", action: "save" },
+      { key: "f", label: "Report this result as feedback...", action: "feedback" },
     ];
 
     if (hasJson) {
@@ -436,6 +438,9 @@ export async function executePostRunAction(
   output: string
 ): Promise<boolean> {
   switch (result.action) {
+    case "feedback":
+      // The caller owns flow identity and prompts for the feedback message.
+      return false;
     case "copy": {
       const copied = copyToClipboard(output);
       if (copied) {

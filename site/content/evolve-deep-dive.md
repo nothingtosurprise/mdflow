@@ -1,155 +1,227 @@
 ---
-title: mdflow auto-evolve — flows that improve themselves, gated on proof
-description: How auto-evolution redrafts a flow's prompt from real complaints and applies the new draft only when the eval suite proves it clean and no worse than before.
-source: https://tropic-hill-p35c.here.now/
+title: mdflow Evolve — change with proof
+description: How feedback becomes a private prompt proposal with content-bound verification, capability checks, explicit review, atomic apply, and rollback.
 ---
 
-# Flows that improve themselves — gated on proof
+# Agents that can change — through proof
 
-`mdflow v4 · evolve: auto`
+`mdflow v4 · proposal-first evolution`
 
-**Auto-evolution** lets an mdflow flow redraft its own prompt from real complaints, and applies the new draft only when the eval suite proves it is clean and no worse than before.
+Evolve turns a reported problem into a reviewable prompt proposal. It does not
+let a timing signal rewrite a live agent, and it does not call an equal green
+score a fix.
 
-> `md complain` → `md evolve` → the flow rewrites its prompt, gates it on the suite, and keeps it only if it wins.
+> `md feedback` → reviewed eval → `md evolve plan` → private proposal → exact
+> verification → review → explicit apply or reject.
 
-## What mdflow is
+The moat is not self-editing. It is a provider-neutral change protocol where
+evidence, capabilities, cost, proof, consent, lineage, and rollback are all
+inspectable.
 
-mdflow (`md`) runs AI agents defined as markdown files — **flows**. YAML frontmatter becomes CLI flags for an engine (claude, codex, copilot, pi, …); the body is the prompt. Flows live in `./flows` and earn behavioral eval suites (`<flow>.eval.ts`, run with `md eval`). Results land in a **trust ledger**, where a full clean pass stamps `lastCleanAt`. Auto-evolution turns everyday dissatisfaction into a reversible prompt revision guarded against suite regressions.
+## The contract
 
-## Five stages, evidence to outcome
+Evolve makes ten promises:
 
-Every stage is a checkpoint. Nothing downstream runs until the stage before it earns its right to.
+1. The resolved maintainer, maximum flow invocations, and write surface appear
+   before paid work starts.
+2. Quick reruns and metadata-only failures cannot authorize source mutation.
+3. A proposal cannot silently add command, network, provider, or file access.
+4. Current and proposal verification never use the canonical flow as a test
+   fixture.
+5. Proof is bound to exact content and execution configuration.
+6. Apply and rollback are atomic, locked, hash-guarded transactions.
+7. Rejection, timeout, and infrastructure failure leave evidence open.
+8. “Verified improvement” requires feedback-specific red/green proof.
+9. Decisions have durable states, reason codes, artifacts, and event journals.
+10. Automatic policy creates proposals only. Source changes require review and
+    an explicit apply command.
 
-### 1 · Evidence — real usage becomes signal
-
-`md complain flows/x.md "too verbose"` records an explicit complaint. Non-zero-exit runs in the telemetry corpus are *rough runs*. For `evolve: auto` flows, re-running within 2 minutes records an implicit complaint — the user re-ran because the output wasn't right.
-
-### 2 · Decision — `decideEvolve()`, a pure function that refuses
-
-Refuses without an eval suite (*evolution is gated on proof*). Refuses without fresh evidence. In auto mode, additionally refuses unless the trust ledger has `lastCleanAt` — machine diffs never auto-apply to an unproven suite.
-
-### 3 · Draft — redraft the body, freeze the frontmatter
-
-One engine turn redrafts the prompt **body only** — the mutation surface is data, not code. Complaints are framed as untrusted evidence. The reply is accepted only if it holds *exactly one* fenced block, closing fence on its own line, non-empty body.
-
-### 4 · Gate — regression is measured
-
-The ancestor is scored on its own suite first (baseline). Then the candidate runs the same full suite. Accepted only if it is clean **and no worse than baseline**: `benefit: ancestor 0/1 → candidate 1/1`. That proves the candidate against the suite; it proves the complaint was fixed only when an eval case represents that complaint.
-
-### 5 · Outcome — applied for review, or byte-identical revert
-
-Accepted → applied in place; review with `git diff` (mdflow never commits). Rejected → byte-identical revert, and the candidate is parked at `<flow>.pending.md`.
-
-## Why auto mode waits for `lastCleanAt`
-
-Manual `md evolve` needs a suite and fresh evidence. Auto mode adds one more rung — the one that makes unattended rewrites safe.
-
-**Machine diffs never auto-apply to an unproven suite.** `decideEvolve` in auto mode refuses unless the flow's trust-ledger entry carries `lastCleanAt` — the codebase's purpose-built proof-of-clean-suite marker, stamped only when a full `md eval` passes clean end-to-end.
-
-Without it, there is no ground truth for "no worse than baseline" to mean anything. So the flow refuses, out loud, and tells you exactly what to do: run `md eval` to a clean pass first. An unproven suite can gate nothing.
-
-## Watch it refuse, then earn it
-
-Real run, `claude` as the maintainer engine. The flow refuses until the suite is proven clean, then evolves on the next ordinary run.
+## One problem, one stable ID
 
 ```console
-$ md evolve flows/answer.claude.md --check --auto
-no evolution: auto evolution requires a trust-ledger entry with lastCleanAt —
-run `md eval` to a clean pass first. Machine diffs never auto-apply to an
-unproven suite.
-  complaint: way too verbose - I just want the one word
+$ md feedback flows/review.md "missed the renamed-file regression"
+Feedback fb_01J… saved for flows/review.md
 
-$ md eval flows/answer.claude.md
-  ✓ answers green
-1/1 passed
-clean run recorded in trust ledger
-
-$ md flows/answer.claude.md          # a normal run — evolution fires post-run
-The team color is **GREEN**. ...
-evolve: auto — evolve: 1 complaint(s), 0 rough run(s)
-evolve: auto — cost: 1 maintainer turn + 1 baseline eval turn(s) + 1 candidate eval turn(s) = 3 engine turns
-evolve: auto — baseline (ancestor):
-evolve: auto —   ✓ answers green
-evolve: auto — drafting candidate (1 maintainer turn)…
-evolve: auto — gating candidate against the eval suite:
-evolve: auto —   ✓ answers green
-evolve: auto — benefit: ancestor 1/1 → candidate 1/1
-evolve: auto — applied. Review with: git diff flows/answer.claude.md
+Status: saved, not yet proved
+Next: md evolve plan flows/review.md
 ```
 
-Note the arithmetic on line 2 of the run: **cost is printed before it is spent**. The suite scored the ancestor at 1/1 and the candidate at 1/1 — the candidate is no worse and clean, so it wins on the strength of addressing a verbosity complaint the suite can't see.
+Feedback is private, bounded, and durable. Each item moves through `open →
+targeted → resolved | dismissed`; it is never consumed by a wall-clock
+watermark. `md feedback list`, `show`, `dismiss`, and `reopen` make that state
+visible; `forget` explicitly removes one item and its status history from
+private storage.
 
-## What one maintainer turn changed
+`md evolve prune --days 30` removes older unapplied attempts and completed job
+logs after confirmation, while retaining applied rollback lineage.
 
-Frontmatter frozen, body only. The rambling reasoning prompt became a direct one.
+A quick rerun is ambiguous: maybe the user changed input, compared providers,
+or pressed Enter twice. When enabled, mdflow records it only as a low-confidence
+observation and asks for explicit feedback. It does not spend or mutate.
 
-**− before (ancestor body)**
+## Distill drafts a test, not truth
 
-```text
-Think step by step, and explain your reasoning in a few sentences before you
-give the final answer. Walk through what the team color might be and why,
-then conclude.
+```console
+$ md feedback distill fb_01J…
+Draft eval case: ~/.mdflow/evolution/drafts/fb_01J….eval-case.ts
+
+This is an untrusted, deliberately failing draft.
+Review its assertion before copying it into the suite.
 ```
 
-**+ after (applied candidate)**
+Eval files are executable TypeScript. Generated code cannot quietly become the
+policy that judges future agents, so the draft lives outside the repository and
+fails on purpose until a human defines an observable assertion. A reviewed case
+links back with `evidence: ["fb_01J…"]`.
 
-```text
-Answer the team color question directly and concisely. The team color is
-GREEN. State that as the very first line of your reply. Do not invent
-reasoning, history, or step-by-step deliberation — the answer is fixed, so
-padding it with speculation only buries it.
+## Plan before spending
+
+```console
+$ md evolve plan flows/review.md
+proposal ready to plan: suite and actionable feedback are present
+cost: at most 7 flow invocations: 1 proposal + 3 current + 3 proposal
+writes: private evolution artifact only; source remains unchanged
+maintainer: claude/opus (isolated)
 ```
 
-The frontmatter block was preserved byte-for-byte. A drafter that tried to sneak `dangerously-skip-permissions: true` into the frontmatter could not — `replaceBody` only ever touches the prompt text.
+`plan` is free. It statically inspects the suite without importing executable
+top-level code, and the arithmetic includes repeated eval trials. Non-interactive
+paid work refuses without `--yes`; interactive confirmation defaults to No.
+Machine consumers can use one `--json` result or streaming `--events` NDJSON.
 
-## Each invariant, and the test that proves it
+The policy can cap invocations, proposals per day, and cooldown. `propose` mode
+prints this plan and queues private background work after explicit actionable
+feedback. Legacy `evolve: auto` maps to proposal-only behavior. There is no
+unattended apply.
 
-The verification harness (`src/evolve.test.ts`) drives every claim deterministically with stub engines — no real model, no flake.
+## The live flow never becomes the fixture
 
-- **No suite → never fires. No evidence → never fires.** `decideEvolve` is a pure function; the "must not fire" cases assert zero maintainer calls and zero eval turns.
-- **Synthetic eval-sandbox runs can never become evidence.** `MDFLOW_EVAL_RUN` short-circuits the hook and `MDFLOW_RUNS_FILE` is redirected into the sandbox — the learning corpus is real usage only.
-- **Accepted evolution consumes its evidence.** The evolve ledger's watermark advances on acceptance — no re-trigger loops on the same complaints.
-- **Bad candidates revert byte-identical.** A candidate that scores worse (or dirty) is written back to the original bytes and parked at `<flow>.pending.md`.
-- **Crash safety mid-gate.** The original is parked at `<flow>.md.evolve-backup` before mutation and auto-restored on the next evolve if a gate died mid-flight.
-- **Cost printed before spent; `--check` is always free.** The turn arithmetic prints before any engine turn; non-TTY without `--yes` refuses to spend.
-- **A drafter can't inject frontmatter.** Body-only mutation: `dangerously-skip-permissions: true` in a draft is discarded because frontmatter is frozen verbatim.
+Each proposal gets a private `evr_...` receipt directory containing its plan,
+evidence membership, immutable current and proposal files, prompt/capability
+diffs, current/proposal results, decision, and append-only events.
 
-## Watermarks are per-evidence-kind
+Current and proposal run from separate repository snapshots. Tracked and
+untracked non-ignored files are copied off-path; symlinks that escape the
+repository are refused. No `.pending.md`, scratch gate ledger, or half-tested
+candidate appears beside a runnable flow.
 
-**A clean eval must not swallow a complaint it can't measure.**
+These workspaces are isolation fixtures, not host sandboxes. Eval modules and
+engines still have whatever filesystem, network, credential, and process access
+the current user grants them. Timed-out process groups receive TERM and then
+KILL, but users must still review executable suites.
 
-Complaints are consumed **only by evolution itself**. A suite that checks correctness passing clean does not mean a *verbosity* complaint was addressed — so a clean `md eval` leaves complaints untouched for evolution to act on. Rough runs are different: a crash-class problem *is* resolved evidence once the full suite passes clean, so rough runs are consumed by evolution **or** a later clean full eval. This split was a real bug found during live verification, and fixed.
+## Capability changes are a separate axis
 
-## The commands
+Freezing YAML is not enough: a prompt body can contain inline commands,
+executable fences, remote URLs, context providers, globs, and file imports.
+Evolve computes a capability manifest before candidate execution. New
+capabilities park the proposal as `capability_rejected` unless a policy
+explicitly permits the private experiment; they can never produce an automatic
+source edit.
 
-| Command | What it does |
+## Proof is a receipt, not a timestamp
+
+A content receipt hashes:
+
+- the flow and execution-relevant imported files/globs;
+- the eval suite and its local module graph;
+- merged project/global configuration;
+- resolved engine and model;
+- mdflow version; and
+- case definitions, evidence links, repetitions, and quorum.
+
+Change any relevant input and the old receipt becomes stale. Moving a checkout
+does not invalidate equivalent content merely because an absolute path changed.
+Automatic comparative proof accepts either a clean current receipt or a stable
+receipt whose failures are all linked to the targeted feedback; unrelated
+current failures block the run.
+
+Unknown nonzero exits fail unless a case explicitly sets `allowNonZero: true`.
+Recognized provider, authentication, environment, cancellation, and timeout
+failures are inconclusive. Repeated stochastic cases report every trial; mixed
+pass/fail results are flaky and cannot mint clean proof, even when their numeric
+quorum passes.
+
+## Four honest outcomes
+
+| Outcome | What it means |
 | --- | --- |
-| `md complain <flow.md> "msg"` *(free)* | Record an explicit complaint as evolution evidence. |
-| `md evolve <flow.md>` | Manual, consent-gated evolution. Prints cost, asks before spending turns. |
-| `md evolve --check [--auto]` *(free)* | Preview the decision and evidence. No draft, no eval runs. |
-| `md evolve --yes` | Non-interactive: skip the consent prompt (required off a TTY). |
+| **Verified improvement** | A feedback-linked case failed on current, passed on proposal, and every proposal guardrail passed without flake. |
+| **Regression-safe proposal** | Guardrails passed, but no case proved the reported problem red/green. Human review only. |
+| **Rejected** | The proposal regressed declared behavior. Evidence remains open. |
+| **Inconclusive** | Timeout, infrastructure uncertainty, interruption, or flake prevented a trustworthy result. Evidence remains open. |
 
-## Opt in: one line of frontmatter
+Equal scores can justify a reviewable proposal. They cannot justify the word
+“fixed.”
+
+## Review, apply, recover
+
+```console
+$ md evolve show evr_01J…
+Status: verified_improvement
+Capabilities: no additions
+Invocations: 7/7
+
+diff --git current.md proposal.md
+…
+
+$ md evolve apply evr_01J…
+Status: applied
+
+$ md evolve rollback evr_01J…
+Status: rolled_back
+```
+
+`show` exposes the decision, capability delta, planned/actual invocations, and
+prompt diff. Apply takes a per-flow lock and compare-and-swaps against the exact
+base hash; a human edit made after proposal creation wins. Persistence uses a
+same-directory temporary file, fsync, and rename. Rollback is guarded against
+overwriting newer work, and interrupted transaction states recover from content
+hashes rather than backup filenames.
+
+## Policy without magic
 
 ```yaml
----
-description: review staged changes
-evolve: auto
----
+evolve:
+  mode: propose             # off | observe | suggest | propose | apply
+  triggers: [explicit-feedback, classified-failure]
+  maintainer:
+    engine: claude
+    model: opus
+    timeout-ms: 180000
+  budget:
+    max-invocations: 9
+    max-per-day: 2
+    cooldown-ms: 86400000
+  gate:
+    require-feedback-eval: true
+    allow-capability-delta: false
+    repetitions: 1
+  apply: review
 ```
 
-The frontmatter opt-in is the standing consent. After each successful run, a quick re-run is logged as an implicit complaint, and evolution fires on fresh evidence — still refusing without a suite, without evidence, and without `lastCleanAt`.
+- `off`: no automatic observation or work.
+- `observe`: retain enabled evidence only.
+- `suggest`: surface the next free action without spending.
+- `propose`: queue bounded private proposal work; never edit source.
+- `apply`: reserved for a future earned automation tier; today it remains
+  proposal-only for automatic handling.
+
+Use `--no-evolve` or `MDFLOW_EVOLVE=off` as an immediate escape hatch. Workflow
+runs keep the same feedback affordances, but proposal generation explicitly
+refuses until step-level attribution can identify the responsible agent node.
+`md evolve prune --days 30 --yes` removes eligible old private proposals and
+completed job logs while retaining applied lineage.
 
 ## The creed
 
-> If a guardrail isn't covered by an eval, it's a wish.
+> If a guardrail is not covered by an eval, it is a wish.
 
-> Everything is gated on proof.
+> If feedback is not covered by a red/green case, it is not a proved fix.
 
-> Regression is measured. Improvement becomes proof when the complaint is an eval.
+> Agents may change—but only through evidence, capability accounting, exact
+> receipts, explicit consent, atomic application, and rollback.
 
 ---
 
-[→ mdflow.dev](https://mdflow.dev) · [→ github.com/johnlindquist/mdflow](https://github.com/johnlindquist/mdflow)
-
-*mdflow v4 — complaints can drive prompt revisions; frontmatter is frozen; auto-apply remains gated by the eval suite.*
+[→ mdflow.dev](https://mdflow.dev) · [→ GitHub](https://github.com/johnlindquist/mdflow) · [→ normative Evolve docs](https://github.com/johnlindquist/mdflow/blob/main/docs/evolve.md)

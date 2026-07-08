@@ -19,6 +19,7 @@
     "assets",
     "skills",
     "docs/public-api.md",
+    "docs/evolve.md",
     "README.md"
   ],
   "scripts": {

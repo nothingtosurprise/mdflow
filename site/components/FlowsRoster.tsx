@@ -57,7 +57,7 @@ export const FlowsRoster: React.FC = () => {
                     >
                         <Editor
                             filename="flows/"
-                            content={`flows/\n├── README.md          # the roster index\n├── review.md          # review staged changes\n├── review.eval.ts     # proof it catches bugs\n├── release.md         # draft release notes\n├── release.eval.ts\n├── triage.md          # label + rank new issues\n└── triage.eval.ts\n\n# .mdflow.yaml\nengine: pi             # project default`}
+                            content={`flows/\n├── README.md          # the roster index\n├── review.md          # review staged changes\n├── review.eval.ts     # proof it catches bugs\n├── release.md         # draft release notes\n├── release.eval.ts\n├── triage.md          # label + rank new issues\n└── triage.eval.ts\n\n# .mdflow.yaml\nengine: pi             # project default\nevolve:\n  mode: suggest        # notify; never spend or apply`}
                         />
                     </motion.div>
                     <motion.div

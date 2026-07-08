@@ -9,7 +9,7 @@
  * session wrote.
  *
  * The fallback (no engine CLI, no TTY, declined consent, or --yes) scaffolds
- * the starter catalog deterministically — zero engine turns.
+ * the starter catalog deterministically — zero engine invocations.
  *
  * The guide prompt is passed to the engine verbatim: it deliberately does NOT
  * go through the import/template pipeline, since it is full of `{{ _var }}`
@@ -31,6 +31,7 @@ import { applyDefaults, applyInteractiveMode, getCommandDefaults, loadProjectCon
 import { parseFrontmatter } from "./parse";
 import { stampCreatedVersion } from "./compat";
 import type { AgentFrontmatter } from "./types";
+import { ensureFlowIdentity } from "./evolution-core";
 
 const ASSETS_DIR = join(import.meta.dir, "..", "assets", "init");
 const PROJECT_CONFIG_FILE = ".mdflow.yaml";
@@ -94,6 +95,24 @@ function packageVersion(): string {
   } catch {
     return "unknown";
   }
+}
+
+function starterEvalSource(flowName: string): string {
+  return `/**
+ * Starter behavioral guardrail for ${flowName}.
+ *
+ * Review and strengthen this case before trusting it for evolution decisions.
+ * Preview cost with: md eval flows/${flowName} --plan
+ */
+export default [
+  {
+    name: "returns a substantive answer",
+    kind: "stochastic",
+    check: ({ stdout }: { stdout: string }) =>
+      stdout.trim().length >= 20 ? null : "expected at least 20 characters of useful output",
+  },
+];
+`;
 }
 
 /**
@@ -172,12 +191,14 @@ export async function postFlightReport(cwd: string): Promise<string[]> {
       // no `_mdflow_version` yet — record the mdflow that adopted them so
       // the compat system can track them from here on.
       const content = readFileSync(path, "utf-8");
-      const stamped = stampCreatedVersion(content);
+      const stamped = ensureFlowIdentity(stampCreatedVersion(content));
       if (stamped !== content) writeFileSync(path, stamped);
       const { frontmatter } = parseFrontmatter(stamped);
       const resolved = resolveEngine(path, frontmatter, { configEngine });
       const description = frontmatter.description ? String(frontmatter.description) : "(no description)";
-      lines.push(`  flows/${file} — ${description} → ${resolved.engine} (engine via ${resolved.source})`);
+      const suite = join(flowsDir, file.replace(/\.md$/i, ".eval.ts"));
+      const guardrail = existsSync(suite) ? "eval ready" : "no eval suite";
+      lines.push(`  flows/${file} — ${description} → ${resolved.engine} (engine via ${resolved.source}; ${guardrail})`);
     } catch (err) {
       lines.push(`  flows/${file} — FAILED to parse: ${(err as Error).message}`);
     }
@@ -204,27 +225,36 @@ export function scaffoldStarterFlows(cwd: string, engine: string): string[] {
     const target = join(flowsDir, entry.name);
     if (existsSync(target)) {
       lines.push(`  skipped flows/${entry.name} (already exists)`);
-      continue;
+    } else {
+      writeFileSync(target, ensureFlowIdentity(stampCreatedVersion(entry.content)));
+      lines.push(`  created flows/${entry.name} — ${entry.description}`);
     }
-    writeFileSync(target, stampCreatedVersion(entry.content));
-    lines.push(`  created flows/${entry.name} — ${entry.description}`);
+
+    const evalName = entry.name.replace(/\.md$/i, ".eval.ts");
+    const evalTarget = join(flowsDir, evalName);
+    if (existsSync(evalTarget)) {
+      lines.push(`  skipped flows/${evalName} (already exists)`);
+    } else {
+      writeFileSync(evalTarget, starterEvalSource(entry.name));
+      lines.push(`  created flows/${evalName} — starter behavioral guardrail`);
+    }
   }
 
   const readmePath = join(flowsDir, "README.md");
   if (!existsSync(readmePath)) {
     const rows = catalog
-      .map((e) => `| ${e.name} | ${e.description} | \`md flows/${e.name}\` |`)
+      .map((e) => `| ${e.name} | ${e.description} | \`md flows/${e.name}\` | \`md eval flows/${e.name} --plan\` |`)
       .join("\n");
     writeFileSync(
       readmePath,
       `# Flow roster
 
 Flows are AI agents defined as markdown, run with [mdflow](https://mdflow.dev).
-Each real run costs one engine turn. Preview any flow for free with
+Each real run launches one paid flow invocation. Preview any flow for free with
 \`md flows/<name>.md --_dry-run\`.
 
-| Flow | Description | Run |
-| ---- | ----------- | --- |
+| Flow | Description | Run | Verify plan |
+| ---- | ----------- | --- | ----------- |
 ${rows}
 `
     );
@@ -240,9 +270,13 @@ ${rows}
       `# mdflow project config — https://mdflow.dev
 # Default engine for engine-neutral flows in this repo.
 engine: ${engine}
+
+# Surface evidence after each run; proposals still require explicit review/apply.
+evolve:
+  mode: suggest
 `
     );
-    lines.push(`  created ${PROJECT_CONFIG_FILE} (engine: ${engine})`);
+    lines.push(`  created ${PROJECT_CONFIG_FILE} (engine: ${engine}; evolve: suggest)`);
   } else {
     lines.push(`  skipped ${PROJECT_CONFIG_FILE} (already exists)`);
   }
@@ -346,7 +380,7 @@ export async function runInit(args: string[]): Promise<number> {
 
     if (!consent) {
       const scaffold = await confirm({
-        message: "Scaffold starter flows instead (no engine turns)?",
+        message: "Scaffold starter flows instead (no engine invocations)?",
         default: true,
       });
       if (!scaffold) {

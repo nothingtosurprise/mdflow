@@ -10,19 +10,21 @@ import { motion } from 'framer-motion';
 
 const SETUP_PROMPT = `Start my repo's agent roster with mdflow:
 
-1. Run \`npx mdflow init --yes\` in this repo. It scaffolds ./flows (starter flows + README roster) and .mdflow.yaml, spending zero engine turns — it never launches an agent in --yes mode.
-2. Tailor the generated flows to THIS repo: the right test command, the right diff scope, our vocabulary. Set .mdflow.yaml's engine to whichever CLI I have (pi, claude, codex, copilot, cursor-agent, agy).
-3. Add a colocated eval suite to every tailored production flow. Use 1 to 3 behavioral cases that check invariants, not exact wording.
-4. Verify for free: run \`md flows/review.md --_dry-run\` and show me the command plan plus which rung of the engine ladder won. Dry-run must not execute inline command imports.
-5. Do NOT do a real run or eval until I say go. A real run costs one engine turn; eval cost is one turn per case.`;
+1. Run \`npx mdflow init --yes\` in this repo. It scaffolds ./flows (starter flows, starter evals, README roster) and .mdflow.yaml with evolve.mode: suggest, spending zero engine invocations.
+2. Tailor the generated flows to THIS repo: the right test command, diff scope, vocabulary, and engine.
+3. Replace each generic starter eval with 1 to 3 behavioral cases that check invariants, not exact wording.
+4. Verify for free: run \`md flows/review.md --_dry-run\` and \`md eval flows/review.md --plan\`. Show the command plan, engine-resolution rung, case count, repetitions, and paid invocation estimate.
+5. Do NOT do a real flow or eval run until I separately approve it. Never infer consent for one from the other.`;
 
 const SKILL_COMMAND = `npx skills add johnlindquist/mdflow`;
 
 const EVALS_PROMPT = `Give every flow in ./flows a colocated eval suite <flow>.eval.ts that exports default an EvalCase[]:
 
-- 1 to 3 cases, each with optional setup(dir) fixtures and a check({ stdout, dir, exitCode }) that returns null on pass or a failure reason.
+- 1 to 3 cases, each with optional setup(dir), repetitions/quorum, and a check({ stdout, dir, exitCode, timedOut }) that returns null on pass or a failure reason.
 - Check invariants (files created, numbers, names), never exact wording.
-- Before running anything, tell me what \`md eval <flow>.md\` will cost (one engine turn per case) and wait for my go-ahead.
+- Nonzero exits fail by default; timeouts are inconclusive; mixed repetitions are flaky and cannot mint clean proof.
+- Run \`md eval <flow>.md --plan\` first. Tell me the exact paid invocation count including repetitions and wait for my go-ahead.
+- Link regression cases to durable feedback with evidence: ["fb_..."]; generated Distill drafts are untrusted until reviewed.
 
 Creed: if a guardrail isn't covered by an eval, it's a wish.`;
 
@@ -63,7 +65,7 @@ export const AgentPrompts: React.FC = () => {
                         index={0}
                         accent="orange"
                         title="Start my agent roster"
-                        description="Runs npx mdflow init to scaffold ./flows, then tailors every flow to your repo. Zero engine turns spent until you say go."
+                        description="Scaffolds flows, starter evals, and suggest-only evolution; then tailors them to your repo. Zero paid invocations until you say go."
                         prompt={SETUP_PROMPT}
                         shaderTarget="setup-prompt"
                         shaderPriority={0.9}
@@ -82,7 +84,7 @@ export const AgentPrompts: React.FC = () => {
                         index={2}
                         accent="emerald"
                         title="Add evals to every flow"
-                        description="Behavioral suites in isolated temp workspaces. Cost quoted before a single turn is spent. Results land in the trust ledger."
+                        description="Behavioral suites with repetition-aware plans and content-bound receipts. Cost is quoted before a paid invocation."
                         prompt={EVALS_PROMPT}
                     />
                     <CopyPrompt

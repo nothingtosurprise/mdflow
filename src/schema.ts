@@ -59,6 +59,33 @@ const formInputsSchema = z.union([
   z.record(formInputKeySchema, inputDefinitionSchema),
 ]);
 
+const evolutionModeSchema = z.enum(["off", "observe", "suggest", "propose", "apply"]);
+const evolutionPolicySchema = z.union([
+  z.literal("auto"),
+  evolutionModeSchema,
+  z.object({
+    mode: evolutionModeSchema.optional(),
+    triggers: z.array(z.enum(["explicit-feedback", "classified-failure", "quick-rerun"])).optional(),
+    maintainer: z.object({
+      engine: z.string().min(1).optional(),
+      model: z.string().min(1).optional(),
+      isolated: z.boolean().optional(),
+      "timeout-ms": z.number().int().positive().optional(),
+    }).strict().optional(),
+    budget: z.object({
+      "max-invocations": z.number().int().positive().optional(),
+      "max-per-day": z.number().int().nonnegative().optional(),
+      "cooldown-ms": z.number().int().nonnegative().optional(),
+    }).strict().optional(),
+    gate: z.object({
+      "require-feedback-eval": z.boolean().optional(),
+      "allow-capability-delta": z.boolean().optional(),
+      repetitions: z.number().int().positive().optional(),
+    }).strict().optional(),
+    apply: z.enum(["review", "automatic"]).optional(),
+  }).strict(),
+]);
+
 export type InputDefinitionSchema = z.infer<typeof inputDefinitionSchema>;
 
 /**
@@ -104,6 +131,7 @@ const commandDefaultsSchema = z.record(
 export const globalConfigSchema = z.object({
   engine: z.string().min(1).optional(),
   commands: z.record(z.string(), commandDefaultsSchema).optional(),
+  evolve: evolutionPolicySchema.optional(),
 }).strict().describe("Global mdflow configuration");
 
 /** Type inferred from config schema */
@@ -163,6 +191,9 @@ export const frontmatterSchema = z.object({
   // System prompt override / append (adapter-translated per engine)
   "_system-prompt": z.string().optional(),
   "_append-system-prompt": z.union([z.string(), z.array(z.string())]).optional(),
+
+  // Evolution policy. `auto` is retained as a migration alias for proposal-only.
+  evolve: evolutionPolicySchema.optional(),
 }).passthrough(); // Allow all other keys - they become CLI flags (including $1, $2, etc.)
 
 /** Type inferred from schema */

@@ -49,9 +49,10 @@ const COMMAND_DOCS: Record<string, { usage: string; description: string }> = {
   init: { usage: "init [--engine <e>] [-y]", description: "bootstrap a flow roster (agent-guided; -y scaffolds deterministically)" },
   create: { usage: "create [name] [flags]", description: "create a new flow file" },
   explain: { usage: "explain <flow.md>", description: "show resolved config without executing (free)" },
-  eval: { usage: "eval <flow.md>", description: "run the flow's eval suite — costs engine turns" },
-  complain: { usage: 'complain <flow.md> "msg"', description: "record evolution evidence (free)" },
-  evolve: { usage: "evolve <flow.md> [--check]", description: "evidence-gated prompt evolution; --check is free" },
+  eval: { usage: "eval <flow.md> [--plan]", description: "run or cost-preview the executable eval suite" },
+  feedback: { usage: 'feedback <flow.md> "msg"', description: "record durable feedback with a stable ID (free)" },
+  complain: { usage: 'complain <flow.md> "msg"', description: "alias for feedback" },
+  evolve: { usage: "evolve plan|propose <flow.md>", description: "plan or create a capability-checked off-path proposal" },
   install: { usage: "install <url|gh:org/repo/path@ref>", description: "install a flow from a registry" },
   remove: { usage: "remove <name>", description: "remove an installed flow" },
   list: { usage: "list", description: "list installed registry flows" },
@@ -93,6 +94,7 @@ const mdFlags = [
   { flag: "--_context", description: "show context tree" },
   { flag: "--raw", description: "raw output (for piping)" },
   { flag: "--json", description: "single JSON result object" },
+  { flag: "--no-evolve", description: "disable post-run evolution handling for this run" },
 ];
 
 const facts = {

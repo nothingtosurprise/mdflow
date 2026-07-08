@@ -37,6 +37,7 @@ export type ReservedFrontmatterSystemKey =
   | "_max_prompt_tokens"
   | "_max_runtime_ms"
   | "_mdflow_version"
+  | "_flow_id"
   | "_compat"
   | "_isolated"
   | "_system-prompt"
@@ -231,11 +232,31 @@ export interface AgentFrontmatter {
    */
   _mdflow_version?: string;
 
+  /** Stable flow identity used by feedback and verification receipts. */
+  _flow_id?: string;
+
   /**
    * Newest mdflow version verified to run this flow successfully. Stamped
    * automatically after clean runs; never passed as a CLI flag.
    */
   _compat?: string;
+
+  /** Proposal-first evolution policy. Legacy `auto` maps to `mode: propose`. */
+  evolve?:
+    | "auto"
+    | "off"
+    | "observe"
+    | "suggest"
+    | "propose"
+    | "apply"
+    | {
+        mode?: "off" | "observe" | "suggest" | "propose" | "apply";
+        triggers?: Array<"explicit-feedback" | "classified-failure" | "quick-rerun">;
+        maintainer?: { engine?: string; model?: string; "timeout-ms"?: number };
+        budget?: { "max-invocations"?: number; "max-per-day"?: number; "cooldown-ms"?: number };
+        gate?: { "require-feedback-eval"?: boolean; "allow-capability-delta"?: boolean; repetitions?: number };
+        apply?: "review" | "automatic";
+      };
 
   /**
    * Engine (agent CLI) that executes this flow, e.g. "claude", "codex", "pi".
@@ -356,6 +377,8 @@ export interface GlobalConfig {
 
   /** Default settings per command */
   commands?: Record<string, CommandDefaults>;
+  /** Default proposal-first evolution policy; flow frontmatter overrides it. */
+  evolve?: FrontmatterValue;
 }
 
 /**

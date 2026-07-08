@@ -57,6 +57,7 @@ import {
 import { isDomainTrusted, promptForTrust, addTrustedDomain, extractDomain } from "./trust";
 import { basename, dirname, resolve, join, delimiter, sep } from "path";
 import { homedir } from "os";
+import { existsSync } from "node:fs";
 // Lazy-load heavy dependencies for cold start optimization
 import { exceedsLimit, StdinSizeLimitError } from "./limits";
 import { countTokensAsync, estimateTokens } from "./tokenizer";
@@ -633,6 +634,10 @@ export class CliRunner {
       const { runComplainCli } = await import("./evolve");
       return { exitCode: runComplainCli(cliArgs.passthroughArgs) };
     }
+    if (subcommand === "feedback") {
+      const { runFeedbackCli } = await import("./evolve");
+      return { exitCode: runFeedbackCli(cliArgs.passthroughArgs) };
+    }
     if (subcommand === "help") cliArgs.help = true;
 
     let filePath = cliArgs.filePath;
@@ -641,7 +646,7 @@ export class CliRunner {
       if (jsonModeRequested && !filePath && subcommand !== "help") {
         this.writeStderr("Usage: md <file.md> [flags for command]");
         this.writeStderr("       md <command> [options]");
-        this.writeStderr("\nCommands: init, create, setup, logs, explain, eval, evolve, complain, install, remove, list, help");
+        this.writeStderr("\nCommands: init, create, setup, logs, explain, eval, evolve, feedback, complain, install, remove, list, help");
         this.writeStderr("Run 'md help' for more info");
         throw new ConfigurationError("No agent file specified", 1);
       }
@@ -655,7 +660,7 @@ export class CliRunner {
       } else if (!result.handled) {
         this.writeStderr("Usage: md <file.md> [flags for command]");
         this.writeStderr("       md <command> [options]");
-        this.writeStderr("\nCommands: init, create, setup, logs, explain, eval, evolve, complain, install, remove, list, help");
+        this.writeStderr("\nCommands: init, create, setup, logs, explain, eval, evolve, feedback, complain, install, remove, list, help");
         this.writeStderr("Run 'md help' for more info");
         throw new ConfigurationError("No agent file specified", 1);
       }
@@ -739,7 +744,7 @@ export class CliRunner {
 
     // Edit before execute
     // Hard prompt budget: _max_prompt_tokens blocks execution BEFORE any
-    // engine turn is spent when the fully resolved prompt exceeds the limit.
+    // paid flow invocation starts when the fully resolved prompt exceeds the limit.
     const maxPromptTokens = frontmatter._max_prompt_tokens;
     if (typeof maxPromptTokens === "number" && maxPromptTokens > 0) {
       const promptTokens = await countTokensAsync(finalBody);
@@ -1010,7 +1015,15 @@ export class CliRunner {
 
       if (workflowResult.exitCode === 0) {
         this.stampCompatAfterSuccess(localFilePath, isRemote);
-        getRecordUsage().then(recordUsage => recordUsage(localFilePath)).catch(() => {}); // Fire and forget
+        const usageSignal = await getRecordUsage().then(recordUsage => recordUsage(localFilePath)).catch(() => null);
+        if (!parsed.noEvolve && !parsed.jsonMode && !isRemote && existsSync(localFilePath)) {
+          const { handleAutoEvolve } = await import("./evolve");
+          await handleAutoEvolve(
+            resolve(localFilePath),
+            usageSignal ?? { quickRerun: false, msSincePrevious: null },
+            (line) => this.writeStderr(line)
+          );
+        }
 
         const promptedVars = (templateVars as Record<string, unknown>)["__promptedVars__"] as Record<string, string> | undefined;
         const noHistoryFlag = (templateVars as Record<string, unknown>)["__noHistory__"] as boolean | undefined;
@@ -1027,6 +1040,33 @@ export class CliRunner {
 
       if (workflowResult.exitCode !== 0) {
         this.printErrorWithLogPath(`Agent exited with code ${workflowResult.exitCode}`, logPath);
+        if (shouldShowMenu && !isRemote) {
+          try {
+            const failedStep = [...workflowResult.stepOrder]
+              .reverse()
+              .map((id) => workflowResult.steps[id])
+              .find((step) => step && !step.skipped && step.exitCode !== 0);
+            const { confirm, input } = await import("@inquirer/prompts");
+            if (await confirm({ message: "Report this workflow failure as feedback?", default: false })) {
+              const message = await input({ message: "What should this workflow have done instead?" });
+              if (message.trim()) {
+                const { recordEvidence } = await import("./evolution-store");
+                const feedback = recordEvidence({
+                  flowPath: localFilePath,
+                  type: "run_failure",
+                  confidence: "high",
+                  failureClass: "behavior",
+                  message: message.trim(),
+                  redactedOutputRef: logPath ?? undefined,
+                  inputHash: failedStep ? Bun.hash(`${failedStep.id}:${failedStep.prompt}`).toString(16) : undefined,
+                });
+                this.writeStderr(`Feedback ${feedback.id} saved. Plan: md evolve plan ${localFilePath}`);
+              }
+            }
+          } catch {
+            // Feedback capture is optional; preserve the workflow exit.
+          }
+        }
       }
 
       if (shouldShowMenu && workflowResult.exitCode === 0) {
@@ -1036,7 +1076,23 @@ export class CliRunner {
             const { showPostRunMenu, executePostRunAction } = await import("./post-run-menu");
             const menuResult = await showPostRunMenu(lastWorkflowOutput);
             if (menuResult && menuResult.action !== "exit") {
-              await executePostRunAction(menuResult, lastWorkflowOutput);
+              if (menuResult.action === "feedback" && !isRemote) {
+                const { input } = await import("@inquirer/prompts");
+                const message = await input({ message: "What went wrong?" });
+                if (message.trim()) {
+                  const { recordEvidence } = await import("./evolution-store");
+                  const feedback = recordEvidence({
+                    flowPath: localFilePath,
+                    type: "explicit_feedback",
+                    confidence: "high",
+                    message: message.trim(),
+                    redactedOutputRef: logPath ?? undefined,
+                  });
+                  this.writeStderr(`Feedback ${feedback.id} saved. Plan: md evolve plan ${localFilePath}`);
+                }
+              } else {
+                await executePostRunAction(menuResult, lastWorkflowOutput);
+              }
             }
           } catch {
             // Menu cancelled or failed, just continue
@@ -1059,7 +1115,7 @@ export class CliRunner {
 
     // Edit before execute
     // Hard prompt budget: _max_prompt_tokens blocks execution BEFORE any
-    // engine turn is spent when the fully resolved prompt exceeds the limit.
+    // paid flow invocation starts when the fully resolved prompt exceeds the limit.
     const maxPromptTokens = frontmatter._max_prompt_tokens;
     if (typeof maxPromptTokens === "number" && maxPromptTokens > 0) {
       const promptTokens = await countTokensAsync(finalBody);
@@ -1166,6 +1222,22 @@ export class CliRunner {
           retryCount++;
           getCommandLogger().info({ retryCount, fixMode: true }, "Retrying with AI fix");
           continue;
+        } else if (menuResult.action === "report") {
+          const { input } = await import("@inquirer/prompts");
+          const message = await input({ message: "What should this flow have done instead?" });
+          if (message.trim() && !isRemote) {
+            const { recordEvidence } = await import("./evolution-store");
+            const feedback = recordEvidence({
+              flowPath: localFilePath,
+              type: "run_failure",
+              confidence: "high",
+              failureClass: "behavior",
+              message: message.trim(),
+              redactedOutputRef: logPath ?? undefined,
+            });
+            this.writeStderr(`Feedback ${feedback.id} saved. Plan: md evolve plan ${localFilePath}`);
+          }
+          break;
         }
       } catch {
         // Menu cancelled or failed, exit loop
@@ -1196,18 +1268,17 @@ export class CliRunner {
         });
       }
 
-      // Stamp before auto-evolve so evolve's backup/revert cycle captures
-      // (and preserves) the updated `_compat`.
+      // Stamp before proposal handling so receipts bind the updated `_compat`.
       this.stampCompatAfterSuccess(localFilePath, isRemote);
 
       const usageSignal = await getRecordUsage()
         .then(recordUsage => recordUsage(localFilePath))
         .catch(() => null);
 
-      // evolve: auto — the flow opted into the learning loop. Quick re-runs
-      // become implicit complaints; evolution itself is still gated (suite +
-      // fresh evidence + trust-ledger lastCleanAt) and prints cost first.
-      if (frontmatter.evolve === "auto") {
+      // Proposal-first evolution policy. Quick reruns remain low-confidence
+      // observations; paid proposal work requires actionable evidence and an
+      // exact current receipt, prints its bound, and never auto-applies.
+      if (!parsed.noEvolve && !parsed.jsonMode && !isRemote && existsSync(localFilePath)) {
         const { handleAutoEvolve } = await import("./evolve");
         await handleAutoEvolve(
           resolve(localFilePath),
@@ -1240,7 +1311,23 @@ export class CliRunner {
         const { showPostRunMenu, executePostRunAction } = await import("./post-run-menu");
         const menuResult = await showPostRunMenu(runResult.stdout);
         if (menuResult && menuResult.action !== "exit") {
-          await executePostRunAction(menuResult, runResult.stdout);
+          if (menuResult.action === "feedback" && !isRemote) {
+            const { input } = await import("@inquirer/prompts");
+            const message = await input({ message: "What went wrong?" });
+            if (message.trim()) {
+              const { recordEvidence } = await import("./evolution-store");
+              const feedback = recordEvidence({
+                flowPath: localFilePath,
+                type: "explicit_feedback",
+                confidence: "high",
+                message: message.trim(),
+                redactedOutputRef: logPath ?? undefined,
+              });
+              this.writeStderr(`Feedback ${feedback.id} saved. Plan: md evolve plan ${localFilePath}`);
+            }
+          } else {
+            await executePostRunAction(menuResult, runResult.stdout);
+          }
         }
       } catch {
         // Menu cancelled or failed, just continue
@@ -1395,7 +1482,7 @@ export class CliRunner {
     let remainingArgs = [...passthroughArgs];
     let commandFromCli: string | undefined;
     let dryRun = false, trustFlag = false, interactiveFromCli = false, noCache = false, rawOutput = false, editFlag = false;
-    let contextOnly = false, quiet = false, noMenu = false, noHistory = false, resume = false;
+    let contextOnly = false, quiet = false, noMenu = false, noHistory = false, noEvolve = false, resume = false;
     let jsonMode = false;
     let cwdFromCli: string | undefined;
     let isolatedFromCli: boolean | undefined;
@@ -1433,6 +1520,8 @@ export class CliRunner {
     // --_no-history flag: skip loading/saving variable history
     const noHistoryIdx = remainingArgs.indexOf("--_no-history");
     if (noHistoryIdx !== -1) { noHistory = true; remainingArgs.splice(noHistoryIdx, 1); }
+    const noEvolveIdx = remainingArgs.findIndex((arg) => arg === "--no-evolve" || arg === "--_no-evolve");
+    if (noEvolveIdx !== -1) { noEvolve = true; remainingArgs.splice(noEvolveIdx, 1); }
     const resumeIdx = remainingArgs.indexOf("--_resume");
     if (resumeIdx !== -1) { resume = true; remainingArgs.splice(resumeIdx, 1); }
     const intIdx = remainingArgs.findIndex((a) => a === "--_interactive" || a === "-_i");
@@ -1477,7 +1566,7 @@ export class CliRunner {
       remainingArgs.splice(appendIdx, 2);
     }
 
-    return { remainingArgs, commandFromCli, dryRun, editFlag, trustFlag, interactiveFromCli, cwdFromCli, noCache, rawOutput, contextOnly, quiet, noMenu, noHistory, resume, jsonMode, isolatedFromCli, systemPromptFromCli, appendSystemPromptFromCli };
+    return { remainingArgs, commandFromCli, dryRun, editFlag, trustFlag, interactiveFromCli, cwdFromCli, noCache, rawOutput, contextOnly, quiet, noMenu, noHistory, noEvolve, resume, jsonMode, isolatedFromCli, systemPromptFromCli, appendSystemPromptFromCli };
   }
 
   private async processAgent(

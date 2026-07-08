@@ -1,8 +1,10 @@
 # mdflow v3 — flows that learn
 
 Status: historical v3 design record. The current package is v4; use
-[`docs/public-api.md`](public-api.md) and the root README for the current
-contract. Updated 2026-07-07.
+[`docs/evolve.md`](evolve.md), [`docs/public-api.md`](public-api.md), and the
+root README for the current contract. The evolution section below intentionally
+preserves the retired live-mutation/watermark design for architectural history;
+it is not current behavior. Updated 2026-07-08.
 
 v3 absorbs an earlier single-file-agent prototype (now retired; its durable
 ideas live here under mdflow's own vocabulary). The pitch:
@@ -89,6 +91,11 @@ full clean run stamps `lastCleanAt`. Eval runs redirect `MDFLOW_RUNS_FILE`
 into the sandbox — synthetic runs never enter the telemetry corpus.
 
 ### Evolve (`md evolve`)
+
+> **Historical behavior, not the current contract.** v4 evolution is
+> proposal-first, uses stable evidence IDs and content-bound receipts, runs
+> current/proposal snapshots off-path, and requires explicit apply. See
+> [`evolve.md`](evolve.md).
 
 `md complain flows/jq.md "output was wrong"` records evidence
 (`~/.mdflow/complaints.jsonl`, override `MDFLOW_COMPLAINTS_FILE`); non-zero

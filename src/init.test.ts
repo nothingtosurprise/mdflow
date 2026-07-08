@@ -46,7 +46,11 @@ describe("buildGuidePrompt", () => {
     expect(prompt).toContain("review.md");
     // The guide must teach dry-run verification and forbid real runs.
     expect(prompt).toContain("--_dry-run");
-    expect(prompt).toContain("Never execute a real engine run");
+    expect(prompt).toContain("Never execute a real engine or eval run");
+    expect(prompt).toContain("md feedback");
+    expect(prompt).toContain("md evolve plan");
+    expect(prompt).toContain("evolve.mode: suggest");
+    expect(prompt).toContain("md eval flows/<name>.md --plan");
   });
 
   it("keeps template/import examples verbatim (no expansion)", () => {
@@ -61,11 +65,19 @@ describe("scaffoldStarterFlows", () => {
     const lines = scaffoldStarterFlows(dir, "claude");
 
     expect(existsSync(join(dir, "flows", "review.md"))).toBe(true);
+    expect(existsSync(join(dir, "flows", "review.eval.ts"))).toBe(true);
     expect(existsSync(join(dir, "flows", "README.md"))).toBe(true);
     expect(existsSync(join(dir, ".mdflow.yaml"))).toBe(true);
 
     const config = readFileSync(join(dir, ".mdflow.yaml"), "utf-8");
     expect(config).toContain("engine: claude");
+    expect(config).toContain("mode: suggest");
+
+    const flow = readFileSync(join(dir, "flows", "review.md"), "utf-8");
+    expect(flow).toContain("_flow_id:");
+
+    const suite = readFileSync(join(dir, "flows", "review.eval.ts"), "utf-8");
+    expect(suite).toContain("returns a substantive answer");
 
     const readme = readFileSync(join(dir, "flows", "README.md"), "utf-8");
     expect(readme).toContain("review.md");
@@ -96,7 +108,8 @@ describe("postFlightReport", () => {
     const rosterLines = lines.filter((l) => l.trimStart().startsWith("flows/"));
     expect(rosterLines.length).toBeGreaterThanOrEqual(3);
     expect(lines.join("\n")).toContain("flows/review.md");
-    expect(lines.join("\n")).toContain("claude (engine via config)");
+    expect(lines.join("\n")).toContain("claude (engine via config; eval ready)");
+    expect(lines.join("\n")).toContain("eval ready");
   });
 
   it("reports when nothing was created", async () => {

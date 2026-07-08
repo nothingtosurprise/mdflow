@@ -437,6 +437,34 @@ describe("runCommand capture modes", () => {
   });
 });
 
+describe("runCommand timeout containment", () => {
+  test("kills the process group so grandchildren cannot write after timeout", async () => {
+    if (process.platform === "win32") return;
+    const { mkdtempSync, existsSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "mdflow-timeout-"));
+    const marker = join(dir, "late-write");
+    try {
+      const result = await runCommand({
+        command: "sh",
+        args: ["-c"],
+        positionals: [`(sleep 0.4; touch '${marker}') & wait`],
+        positionalMappings: new Map(),
+        captureOutput: true,
+        captureStderr: true,
+        silentCapture: true,
+        timeoutMs: 50,
+      });
+      expect(result.timedOut).toBe(true);
+      await Bun.sleep(600);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("runCommand command suggestions", () => {
   let consoleErrorSpy: ReturnType<typeof spyOn>;
   let capturedErrors: string[] = [];
@@ -467,14 +495,15 @@ describe("runCommand command suggestions", () => {
 });
 
 describe("flow metadata keys are never CLI flags (v3)", () => {
-  test("description and route are consumed, real flags still pass", () => {
+  test("description, route, and stable flow id are consumed while real flags pass", () => {
     const args = buildArgs(
-      { description: "review staged changes", route: "review|diff", model: "gpt-5.5" } as AgentFrontmatter,
+      { description: "review staged changes", route: "review|diff", _flow_id: "flow_123", model: "gpt-5.5" } as AgentFrontmatter,
       new Set(),
       "codex"
     );
     expect(args).not.toContain("--description");
     expect(args).not.toContain("--route");
+    expect(args).not.toContain("--_flow-id");
     expect(args).toContain("--model");
   });
 });

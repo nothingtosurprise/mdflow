@@ -10,6 +10,7 @@ import yaml from "js-yaml";
 import { getProjectAgentsDir, getUserAgentsDir } from "./cli";
 import { openInEditor } from "./file-selector";
 import { mdflowVersion } from "./compat";
+import { ensureFlowIdentity } from "./evolution-core";
 
 interface CreateOptions {
   name?: string;
@@ -211,7 +212,7 @@ Examples:
     }
   }
 
-  await Bun.write(targetPath, fileContent);
+  await Bun.write(targetPath, ensureFlowIdentity(fileContent));
 
   console.log(`\n✅ Created agent: ${targetPath}`);
 

@@ -16,20 +16,31 @@ Supported subcommands:
 
 | Command | Description |
 | --- | --- |
-| `md init [--engine <e>] [--yes]` | Initialize a flow roster for the current project. Default: launches an installed agent CLI interactively, pre-loaded with the bundled setup guide (uses your engine session; asks for consent first). `--yes` (or no TTY) scaffolds the starter catalog deterministically — zero engine turns. |
+| `md init [--engine <e>] [--yes]` | Initialize a flow roster for the current project. Default: launches an installed agent CLI interactively, pre-loaded with the bundled setup guide (uses your engine session; asks for consent first). `--yes` (or no TTY) scaffolds the starter catalog deterministically — zero engine invocations. |
 | `md create [name]` | Create a new agent file. |
 | `md explain <agent.md>` | Print resolved config and prompt without execution. |
-| `md eval <flow.md>` | Run the flow's colocated eval suite (`<flow>.eval.ts`). Costs engine turns; cost is printed first. |
-| `md complain <flow.md> "<message>"` | Record evolution evidence for a flow (free). |
-| `md evolve <flow.md> [--check] [--auto] [--yes] [--engine <e>]` | Evidence-gated prompt evolution: refuses without an eval suite or fresh complaints/rough runs; baseline + candidate are scored on the suite and the revision applies only if clean and no worse. `--check` prints the decision for free; `--auto` applies the auto-mode gate. |
-
-Flows may opt into **auto-evolution** with `evolve: auto` in frontmatter: after each successful run, a re-run within 2 minutes is recorded as an implicit complaint, and evolution fires automatically when evidence exists — but only if the flow's trust-ledger entry has `lastCleanAt` (a proven-clean suite). Machine diffs never auto-apply to an unproven suite. Complaints are consumed only by evolution itself; rough runs are consumed by evolution or a later clean `md eval`.
+| `md eval <flow.md> [--plan] [--yes] [--filter <text>] [--json]` | Preview or run the flow's executable colocated eval suite (`<flow>.eval.ts`). Cost includes repetitions and is printed before consent. |
+| `md feedback <flow.md> "<message>"` | Record durable, private evidence with a stable ID (free). `list`, `show`, `distill`, `dismiss`, `reopen`, and explicit permanent `forget` manage its lifecycle/privacy. |
+| `md complain ...` | Compatibility alias for `md feedback`. |
+| `md evolve plan\|status\|propose <flow.md> [--yes] [--engine <e>] [--json\|--events]` | Plan for free or create a private, capability-checked, off-path proposal. Source remains unchanged. |
+| `md evolve show\|review\|apply\|reject\|retry\|rollback <run-id>` | Inspect the receipt/diff, make an explicit decision, retry, or perform hash-guarded apply/rollback. |
+| `md evolve history [flow.md]` | List durable evolution runs. |
+| `md evolve prune [--days <n>] [--yes]` | Remove old unapplied private runs and completed job logs; retain applied rollback lineage. |
+| `md evolve prune [--days <n>] [--yes]` | Delete eligible old private proposal/job data while retaining applied lineage. |
 | `md install <url\|gh:org/repo/path@ref>` | Install a flow from a URL or GitHub shorthand into the registry (project scope by default; `--global` for user scope). Writes `.mdflow/mdflow.lock.json`. |
 | `md remove <name>` | Remove an installed registry flow. |
 | `md list [--project\|--global]` | List installed registry flows. |
 | `md setup` | Configure shell integration. |
 | `md logs` | Show log directory and per-agent logs. |
 | `md help` | Print CLI help. |
+
+Flows can set `evolve.mode` to `off`, `observe`, `suggest`, `propose`, or the reserved `apply` tier. `propose` prints a content-current plan and queues private background work after explicit actionable feedback; it never applies source. Legacy `evolve: auto` maps to `propose`. Quick reruns are low-confidence observations only. See [`evolve.md`](evolve.md) for the full policy, evidence state machine, receipts, and security boundary.
+
+Eval suites export a statically resolvable default array (directly or through a
+top-level `const`). This lets `--plan` derive names, evidence links,
+repetitions, quorum, and cost without importing executable suite code. After
+consent, runtime shape must match the announced static plan before any flow
+invocation starts.
 
 ## mdflow-reserved flags
 
@@ -45,6 +56,7 @@ These flags are consumed by mdflow and are not passed to underlying LLM CLIs.
 | `--_context` | Print context tree and exit. |
 | `--_quiet` | Skip preflight context dashboard. |
 | `--_no-menu` | Disable post-run action menu. |
+| `--no-evolve`, `--_no-evolve` | Disable post-run evolution observation/proposal handling for this invocation. `MDFLOW_EVOLVE=off` is the environment equivalent. |
 | `--raw` | Emit raw markdown output (no terminal renderer). |
 | `--json` | Emit a single JSON result object (`{exitCode, command, args, stdout, stderr}`) and disable interactive UI. |
 
@@ -106,6 +118,8 @@ Use `agy` otherwise.
 | `context_window` | number | Overrides context token-window estimation. |
 | `_mdflow_version` | string | mdflow version the flow was created with. Stamped automatically by `md create`/`md init`; never a CLI flag. |
 | `_compat` | string | Newest mdflow version verified to run the flow successfully. Stamped/upgraded automatically after clean local runs; never a CLI flag. |
+| `_flow_id` | string | Stable identity used by feedback and proposal receipts across rename/clone; stamped by `md create`/`md init`, never passed as a CLI flag. |
+| `evolve` | string or policy object | Proposal-first evolution policy. Valid modes: `off`, `observe`, `suggest`, `propose`, `apply`; legacy `auto` maps to `propose`. Never passed as a CLI flag. |
 
 ### Compatibility stamps
 

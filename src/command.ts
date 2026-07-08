@@ -98,7 +98,7 @@ const SYSTEM_KEYS = new Set([
 
   // Flow metadata (v3): human/roster-facing, never CLI flags. `description`
   // is what marks a minimal file as a flow; `route` is reserved for keyword
-  // routing; `evolve: auto` opts the flow into post-run auto-evolution.
+  // routing; `evolve` configures proposal-first post-run handling.
   "description",
   "route",
   "evolve",
@@ -106,6 +106,7 @@ const SYSTEM_KEYS = new Set([
   // Compatibility/version stamps (v3): written automatically at creation
   // (`_mdflow_version`) and after successful runs (`_compat`); never flags.
   "_mdflow_version",
+  "_flow_id",
   "_compat",
 
   // Isolation + system prompt (v3): consumed by mdflow and translated into
@@ -559,6 +560,12 @@ export interface RunContext {
    * Default: false (render markdown with syntax highlighting)
    */
   rawOutput?: boolean;
+  /** Optional hard runtime bound for maintenance/helper commands. */
+  timeoutMs?: number;
+  /** Optional working directory for the spawned command. */
+  cwd?: string;
+  /** Capture without replaying captured streams to the terminal. */
+  silentCapture?: boolean;
 }
 
 export interface RunResult {
@@ -567,6 +574,7 @@ export interface RunResult {
   stdout: string;
   /** Captured stderr content (empty string if not capturing stderr) */
   stderr: string;
+  timedOut?: boolean;
   /**
    * @deprecated Use `stdout` instead. Kept for backward compatibility.
    */
@@ -709,7 +717,30 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     stderr: shouldPipeStderr ? "pipe" : "inherit",
     stdin: "inherit",
     env: runEnv,
+    cwd: ctx.cwd,
+    detached: process.platform !== "win32",
   });
+
+  const killTree = (signal: NodeJS.Signals) => {
+    if (process.platform !== "win32") {
+      try { process.kill(-proc.pid, signal); return; } catch {}
+    }
+    try { proc.kill(signal); } catch {}
+  };
+
+  let timedOut = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = ctx.timeoutMs && ctx.timeoutMs > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        try {
+          killTree("SIGTERM");
+          killTimer = setTimeout(() => {
+            killTree("SIGKILL");
+          }, 2_000);
+        } catch {}
+      }, ctx.timeoutMs)
+    : undefined;
 
   // Register with ProcessManager for centralized lifecycle management
   const pm = getProcessManager();
@@ -756,16 +787,17 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     // Capture mode: buffer then print (with markdown rendering)
     if (proc.stdout) {
       stdout = await new Response(proc.stdout).text();
-      // Render and print to console so user sees it
-      const rendered = markdownRenderer.processChunk(stdout);
-      const final = markdownRenderer.flush();
-      console.log(rendered + final);
+      if (!ctx.silentCapture) {
+        // Render and print to console so user sees it
+        const rendered = markdownRenderer.processChunk(stdout);
+        const final = markdownRenderer.flush();
+        console.log(rendered + final);
+      }
     }
 
     if (proc.stderr && shouldPipeStderr) {
       stderr = await new Response(proc.stderr).text();
-      // Print stderr to console (no markdown rendering for stderr)
-      console.error(stderr);
+      if (!ctx.silentCapture) console.error(stderr);
     }
   } else if (spinnerActive && proc.stdout) {
     // Spinner mode: stream to stdout with markdown rendering, stop spinner on first output
@@ -799,6 +831,8 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   // mode === "none" without spinner: stdout/stderr are inherited, nothing to capture
 
   const exitCode = await proc.exited;
+  if (timeout) clearTimeout(timeout);
+  if (killTimer) clearTimeout(killTimer);
 
   // Ensure spinner is stopped (in case process exited without output)
   stopSpinner();
@@ -810,6 +844,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     exitCode,
     stdout,
     stderr,
+    timedOut,
     output: stdout, // backward compatibility
     process: proc,
   };

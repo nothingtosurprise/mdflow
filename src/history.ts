@@ -109,8 +109,9 @@ export function getFrecencyScore(path: string): number {
 }
 
 /**
- * A re-run this soon after the previous run reads as dissatisfaction with
- * the previous output — the implicit-complaint signal auto-evolve feeds on.
+ * A re-run this soon after the previous run is an ambiguous observation.
+ * Proposal-first evolution may suggest explicit feedback, but never treats
+ * timing alone as consent to spend or mutate.
  */
 export const QUICK_RERUN_WINDOW_MS = 120_000;
 

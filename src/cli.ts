@@ -185,9 +185,14 @@ Commands:
                                 (guided by an installed agent CLI; -y scaffolds)
   md create [name] [flags]      Create a new agent file
   md explain <agent.md>         Show resolved config without executing
-  md eval <flow.md>             Run the flow's eval suite (<flow>.eval.ts) — costs engine turns
-  md complain <flow.md> "msg"   Record evolution evidence for a flow (free)
-  md evolve <flow.md> [--check] Evidence-gated prompt evolution; --check is free
+  md eval <flow.md> [--plan]    Run or cost-preview the executable eval suite
+  md feedback <flow.md> "msg"   Record feedback with a durable ID (free)
+  md complain <flow.md> "msg"   Alias for md feedback
+  md evolve plan <flow.md>      Show evidence, verification, cost, and writes (free)
+  md evolve propose <flow.md>   Create + verify an off-path proposal; source unchanged
+  md evolve show <run-id>       Inspect a proposal and verification receipt
+  md evolve apply <run-id>      Atomically apply a reviewed proposal
+  md evolve rollback <run-id>   Restore the proposal's captured current flow
   md install <url|gh:...@ref>   Install a flow into the registry (--global for user scope)
   md remove <name>              Remove an installed registry flow
   md list                       List installed registry flows
@@ -262,6 +267,7 @@ md-specific flags (consumed, not passed to command):
   --_quiet          Skip context dashboard display before execution
   --_no-menu        Disable post-run action menu (for scripting/piping)
   --json            Emit a single JSON result object and disable interactive UI
+  --no-evolve       Disable post-run evolution handling for this run
 
 Without arguments:
   md              Interactive agent picker (from ./.mdflow/, ~/.mdflow/, etc.)
