@@ -25,7 +25,6 @@ Supported subcommands:
 | `md evolve plan\|status\|propose <flow.md> [--yes] [--engine <e>] [--json\|--events]` | Plan for free or create a private, capability-checked, off-path proposal. Source remains unchanged. |
 | `md evolve show\|review\|apply\|reject\|retry\|rollback <run-id>` | Inspect the receipt/diff, make an explicit decision, retry, or perform hash-guarded apply/rollback. |
 | `md evolve history [flow.md]` | List durable evolution runs. |
-| `md evolve prune [--days <n>] [--yes]` | Remove old unapplied private runs and completed job logs; retain applied rollback lineage. |
 | `md evolve prune [--days <n>] [--yes]` | Delete eligible old private proposal/job data while retaining applied lineage. |
 | `md install <url\|gh:org/repo/path@ref>` | Install a flow from a URL or GitHub shorthand into the registry (project scope by default; `--global` for user scope). Writes `.mdflow/mdflow.lock.json`. |
 | `md remove <name>` | Remove an installed registry flow. |

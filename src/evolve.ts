@@ -94,6 +94,7 @@ export interface EvolveDecision {
   reason: string;
   reasonCode:
     | "READY"
+    | "FLOW_NOT_FOUND"
     | "NO_SUITE"
     | "NO_ACTIONABLE_EVIDENCE"
     | "VERIFICATION_STALE"
@@ -434,7 +435,7 @@ export async function runEvolve(options: EvolveRunOptions): Promise<EvolveRunRes
     return {
       exitCode: 1,
       applied: false,
-      decision: { evolve: false, reasonCode: "NO_SUITE", reason: `flow not found: ${requestedPath}`, evidence },
+      decision: { evolve: false, reasonCode: "FLOW_NOT_FOUND", reason: `flow not found: ${requestedPath}`, evidence },
     };
   }
 
@@ -938,6 +939,11 @@ export function runComplainCli(args: string[]): number {
 
 function runFeedbackCliImpl(args: string[]): number {
   const json = jsonFlag(args);
+  const fail = (reasonCode: string, message: string): number => {
+    if (json) console.log(JSON.stringify({ error: { reasonCode, message } }));
+    else console.error(message);
+    return 1;
+  };
   const filtered = args.filter((item) => item !== "--json" && item !== "--last" && item !== "--yes");
   const action = filtered[0];
   if (args.includes("--help") || args.includes("-h")) {
@@ -959,13 +965,11 @@ function runFeedbackCliImpl(args: string[]): number {
   if (action === "show") {
     const id = filtered[1];
     if (!id) {
-      console.error("Usage: md feedback show <feedback-id>");
-      return 1;
+      return fail("USAGE", "Usage: md feedback show <feedback-id>");
     }
     const feedback = readEvidence().find((item) => item.id === id);
     if (!feedback) {
-      console.error(`Feedback not found: ${id}`);
-      return 1;
+      return fail("FEEDBACK_NOT_FOUND", `Feedback not found: ${id}`);
     }
     const suitePath = resolveEvalSuitePath(feedback.flowPath);
     const covered = existsSync(suitePath) && readFileSync(suitePath, "utf8").includes(id);
@@ -976,8 +980,7 @@ function runFeedbackCliImpl(args: string[]): number {
   if (action === "dismiss" || action === "reopen") {
     const id = filtered[1];
     if (!id) {
-      console.error(`Usage: md feedback ${action} <feedback-id>`);
-      return 1;
+      return fail("USAGE", `Usage: md feedback ${action} <feedback-id>`);
     }
     const updated = updateEvidenceStatus(id, action === "dismiss" ? "dismissed" : "open");
     emit({ evidence: updated }, json);
@@ -986,8 +989,7 @@ function runFeedbackCliImpl(args: string[]): number {
   if (action === "forget") {
     const id = filtered[1];
     if (!id) {
-      console.error("Usage: md feedback forget <feedback-id> --yes");
-      return 1;
+      return fail("USAGE", "Usage: md feedback forget <feedback-id> --yes");
     }
     if (!args.includes("--yes")) {
       emit(json
@@ -1002,13 +1004,11 @@ function runFeedbackCliImpl(args: string[]): number {
   if (action === "distill") {
     const id = filtered[1];
     if (!id) {
-      console.error("Usage: md feedback distill <feedback-id>");
-      return 1;
+      return fail("USAGE", "Usage: md feedback distill <feedback-id>");
     }
     const feedback = readEvidence().find((item) => item.id === id);
     if (!feedback) {
-      console.error(`Feedback not found: ${id}`);
-      return 1;
+      return fail("FEEDBACK_NOT_FOUND", `Feedback not found: ${id}`);
     }
     const path = feedbackDraftPath(id);
     const suitePath = resolveEvalSuitePath(feedback.flowPath);
@@ -1036,17 +1036,10 @@ export default [
   const flowPath = filtered[0];
   const message = filtered.slice(1).join(" ").trim();
   if (!flowPath || !message) {
-    console.error('Usage: md feedback <flow.md> "what went wrong"');
-    console.error("       md feedback list [flow.md]");
-    console.error("       md feedback show <feedback-id>");
-    console.error("       md feedback distill <feedback-id>");
-    console.error("       md feedback forget <feedback-id> --yes");
-    console.error("       md feedback dismiss|reopen <feedback-id>");
-    return 1;
+    return fail("USAGE", 'Usage: md feedback <flow.md> "what went wrong"; or list, show, distill, forget, dismiss, reopen.');
   }
   if (!existsSync(flowPath)) {
-    console.error(`flow not found: ${flowPath}`);
-    return 1;
+    return fail("FLOW_NOT_FOUND", `flow not found: ${flowPath}`);
   }
   const feedback = recordComplaint(flowPath, message);
   emit(json ? { feedback } : `Feedback ${feedback.id} saved for ${feedback.agentPath}\n\n“${feedback.message}”\n\nCoverage: not represented by an eval yet\nFlow version: ${feedback.flowHash?.slice(0, 12) ?? "unknown"}\nStatus: saved, not yet proved\n\nNext: md feedback distill ${feedback.id}\nPlan: md evolve plan ${flowPath}`, json);
@@ -1067,9 +1060,15 @@ export function runFeedbackCli(args: string[]): number {
 async function runEvolveCliImpl(args: string[]): Promise<number> {
   const json = jsonFlag(args);
   const ndjson = args.includes("--events");
+  const fail = (reasonCode: string, message: string): number => {
+    if (json) console.log(JSON.stringify({ error: { reasonCode, message } }));
+    else if (ndjson) console.log(JSON.stringify({ type: "evolve.error", error: { reasonCode, message } }));
+    else console.error(message);
+    return 1;
+  };
   if (args.includes("--help") || args.includes("-h")) {
     console.log("Usage: md evolve plan|status|propose <flow.md> [--yes] [--engine <e>] [--json|--events]");
-    console.log("       md evolve show|review|apply|reject|rollback <run-id>");
+    console.log("       md evolve show|review|apply|reject|retry|rollback <run-id>");
     console.log("       md evolve history [flow.md]");
     console.log("       md evolve prune [--days <n>] [--yes]");
     return 0;
@@ -1092,13 +1091,13 @@ async function runEvolveCliImpl(args: string[]): Promise<number> {
   let target = positionals[0];
 
   if (action === "retry") {
-    if (!target) { console.error("Usage: md evolve retry <run-id>"); return 1; }
+    if (!target) return fail("USAGE", "Usage: md evolve retry <run-id>");
     target = readEvolutionRun(target).flow.path;
     action = "propose";
   }
 
   if (action === "show") {
-    if (!target) { console.error("Usage: md evolve show <run-id>"); return 1; }
+    if (!target) return fail("USAGE", "Usage: md evolve show <run-id>");
     const run = readEvolutionRun(target);
     const readOptional = (name: string) => {
       try { return readEvolutionArtifact(target, name); } catch { return undefined; }
@@ -1114,13 +1113,13 @@ async function runEvolveCliImpl(args: string[]): Promise<number> {
     return 0;
   }
   if (action === "apply" || action === "rollback") {
-    if (!target) { console.error(`Usage: md evolve ${action} <run-id>`); return 1; }
+    if (!target) return fail("USAGE", `Usage: md evolve ${action} <run-id>`);
     const run = action === "apply" ? await applyEvolutionRun(target) : rollbackEvolutionRun(target);
     emit({ run }, json);
     return 0;
   }
   if (action === "reject") {
-    if (!target) { console.error("Usage: md evolve reject <run-id> [--reason <message>]"); return 1; }
+    if (!target) return fail("USAGE", "Usage: md evolve reject <run-id> [--reason <message>]");
     const index = clean.indexOf("--reason");
     const reason = index === -1 ? "rejected by user" : clean.slice(index + 1).join(" ");
     const run = updateEvolutionRun(target, { status: "dismissed", resultReason: reason });
@@ -1137,8 +1136,7 @@ async function runEvolveCliImpl(args: string[]): Promise<number> {
     const daysIndex = clean.indexOf("--days");
     const days = daysIndex === -1 ? 30 : Number(clean[daysIndex + 1]);
     if (!Number.isFinite(days) || days < 0) {
-      console.error("--days must be a nonnegative number");
-      return 1;
+      return fail("INVALID_ARGUMENT", "--days must be a nonnegative number");
     }
     if (!clean.includes("--yes") && !clean.includes("-y")) {
       if (!process.stdin.isTTY || json) {
@@ -1154,10 +1152,7 @@ async function runEvolveCliImpl(args: string[]): Promise<number> {
     return 0;
   }
   if (!target) {
-    console.error("Usage: md evolve plan|status|propose <flow.md> [--yes] [--engine <e>] [--json|--events]");
-    console.error("       md evolve show|apply|reject|rollback <run-id>");
-    console.error("       md evolve history [flow.md]");
-    return 1;
+    return fail("USAGE", "Usage: md evolve plan|status|propose <flow.md>; show|review|apply|reject|retry|rollback <run-id>; or history [flow.md].");
   }
   const engineIndex = clean.indexOf("--engine");
   const engine = engineIndex === -1 ? undefined : clean[engineIndex + 1];

@@ -468,8 +468,13 @@ export class CliRunner {
 
   async run(argv: string[]): Promise<CliRunResult> {
     const jsonMode = argv.includes("--json");
+    const subcommand = parseCliArgs(argv).filePath;
+    const nativeJsonSubcommand = subcommand !== undefined
+      && ["eval", "evolve", "feedback", "complain"].includes(subcommand);
     let logPath: string | null = null;
-    if (!jsonMode) {
+    // Structured lifecycle commands own their JSON schema. Letting the generic
+    // flow wrapper capture them would double-encode their payload in `stdout`.
+    if (!jsonMode || nativeJsonSubcommand) {
       try {
         return await this.runInternal(argv, (lp) => { logPath = lp; });
       } catch (err) {

@@ -324,6 +324,12 @@ describe("durable evidence", () => {
 });
 
 describe("proposal-first run", () => {
+  it("distinguishes a missing flow from a missing eval suite", async () => {
+    const result = await runEvolve({ flowPath: join(root, "missing.md"), checkOnly: true });
+    expect(result.exitCode).toBe(1);
+    expect(result.decision.reasonCode).toBe("FLOW_NOT_FOUND");
+  });
+
   it("automatic proposal requires a content-current receipt and configured feedback coverage", async () => {
     const flow = writeFlow(GREEN);
     const feedback = recordComplaint(flow, "be more polite");
@@ -625,5 +631,19 @@ describe("CLI lifecycle", () => {
     }
     expect(output).toHaveLength(1);
     expect(JSON.parse(output[0]!)).toMatchObject({ error: { reasonCode: "EVOLVE_COMMAND_FAILED" } });
+  });
+
+  it("keeps usage failures machine-readable in JSON mode", async () => {
+    const output: string[] = [];
+    const prior = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      expect(await runEvolveCli(["show", "--json"])).toBe(1);
+      expect(runFeedbackCli(["show", "--json"])).toBe(1);
+    } finally {
+      console.log = prior;
+    }
+    expect(output).toHaveLength(2);
+    expect(output.map((line) => JSON.parse(line).error.reasonCode)).toEqual(["USAGE", "USAGE"]);
   });
 });

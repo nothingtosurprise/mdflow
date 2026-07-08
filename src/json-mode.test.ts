@@ -77,4 +77,29 @@ console.error("json stderr");`);
     expect(payload.stderr).toContain("json stderr");
     expect(Object.keys(payload).sort()).toEqual(["args", "command", "exitCode", "stderr", "stdout"]);
   });
+
+  it("does not double-encode native lifecycle command JSON", async () => {
+    const runner = new CliRunner({ env, cwd: "/test" });
+    const output: string[] = [];
+    const prior = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    let result;
+
+    try {
+      result = await runner.run(["node", "md", "feedback", "forget", "fb_missing", "--json"]);
+    } finally {
+      console.log = prior;
+    }
+
+    expect(result.exitCode).toBe(1);
+    expect(output).toHaveLength(1);
+    const payload = JSON.parse(output[0]!);
+    expect(payload).toEqual({
+      error: {
+        reasonCode: "CONFIRMATION_REQUIRED",
+        message: "Permanent feedback deletion requires --yes.",
+      },
+    });
+    expect(payload.stdout).toBeUndefined();
+  });
 });

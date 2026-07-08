@@ -193,6 +193,7 @@ Commands:
   md evolve show <run-id>       Inspect a proposal and verification receipt
   md evolve apply <run-id>      Atomically apply a reviewed proposal
   md evolve rollback <run-id>   Restore the proposal's captured current flow
+  md evolve history [flow.md]   List proposal history (use evolve --help for more)
   md install <url|gh:...@ref>   Install a flow into the registry (--global for user scope)
   md remove <name>              Remove an installed registry flow
   md list                       List installed registry flows

@@ -683,11 +683,16 @@ export async function runEvalSuite(options: RunEvalSuiteOptions): Promise<EvalSu
   return outcome;
 }
 
-/** `md eval <flow.md> [--filter <substr>]` */
+/** `md eval <flow.md> [--plan] [--yes] [--filter <substr>] [--json]` */
 export async function runEvalCli(args: string[], cliPath?: string): Promise<number> {
   const yes = args.includes("--yes") || args.includes("-y");
   const planOnly = args.includes("--plan");
   const json = args.includes("--json");
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("Usage: md eval <flow.md> [--plan] [--yes] [--filter <substring>] [--json]");
+    console.log("       --plan is free and does not import executable suite code");
+    return 0;
+  }
   const fail = (reasonCode: string, message: string): number => {
     if (json) console.log(JSON.stringify({ type: "eval.error", reasonCode, message }));
     else console.error(message);
@@ -701,7 +706,7 @@ export async function runEvalCli(args: string[], cliPath?: string): Promise<numb
   const flowPath = positional[0];
 
   if (!flowPath) {
-    return fail("FLOW_REQUIRED", "Usage: md eval <flow.md> [--filter <substring>]");
+    return fail("FLOW_REQUIRED", "Usage: md eval <flow.md> [--plan] [--yes] [--filter <substring>] [--json]");
   }
   if (!existsSync(flowPath)) {
     return fail("FLOW_NOT_FOUND", `flow not found: ${flowPath}`);

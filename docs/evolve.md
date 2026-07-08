@@ -27,8 +27,7 @@ md evolve propose flows/review.md        # asks before paid work
 md evolve show <run-id>                  # decision, capability diff, prompt diff
 md evolve apply <run-id>                 # atomic compare-and-swap
 md evolve rollback <run-id>              # only if source still matches
-md evolve prune --days 30 --yes           # delete old private attempts/logs
-md evolve prune --days 30 --yes           # remove old private, unapplied data
+md evolve prune --days 30 --yes           # remove old private attempts/logs
 ```
 
 `md complain` remains an alias for `md feedback`. `md evolve --check` remains a

@@ -740,6 +740,7 @@ Commands:
   md complain <flow.md> "msg"   Alias for md feedback
   md evolve plan|propose <flow> Plan for free or create a private proposal
   md evolve show|apply <run-id> Review or explicitly apply a proposal
+  md evolve history [flow.md]   List proposal history (use evolve --help for more)
   md install <url|gh:...@ref>   Install a flow into the registry (--global for user scope)
   md remove <name>              Remove an installed registry flow
   md list                       List installed registry flows

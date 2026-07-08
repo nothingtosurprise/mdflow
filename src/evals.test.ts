@@ -1,6 +1,6 @@
 /**
  * Tests for the flow eval harness. All free: the flow runner is injected, so
- * no engine is ever spawned and no model turn is ever spent here.
+ * no engine is ever spawned and no flow invocation is ever spent here.
  */
 
 import { expect, test, describe, beforeEach, afterEach } from "bun:test";
@@ -243,6 +243,20 @@ describe("runEvalSuite", () => {
 });
 
 describe("runEvalCli guardrails", () => {
+  test("help is successful and advertises planning and consent", async () => {
+    const { runEvalCli } = await import("./evals");
+    const prior = console.log;
+    const output: string[] = [];
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      expect(await runEvalCli(["--help"])).toBe(0);
+    } finally {
+      console.log = prior;
+    }
+    expect(output.join("\n")).toContain("--plan");
+    expect(output.join("\n")).toContain("--yes");
+  });
+
   test("JSON plan is one machine-readable object with repetition-aware cost", async () => {
     const { runEvalCli } = await import("./evals");
     const flow = join(tempDir, "repeat.md");
