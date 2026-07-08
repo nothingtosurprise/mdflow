@@ -1,3 +1,10 @@
+## [4.0.1](https://github.com/johnlindquist/mdflow/compare/v4.0.0...v4.0.1) (2026-07-08)
+
+
+### Bug Fixes
+
+* harden trust gates and release contract ([09cfc20](https://github.com/johnlindquist/mdflow/commit/09cfc20b1a6188612a5787eaddcebc8eb9b4c50d))
+
 # [4.0.0](https://github.com/johnlindquist/mdflow/compare/v3.1.0...v4.0.0) (2026-07-07)
 
 
