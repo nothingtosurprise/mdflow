@@ -123,6 +123,7 @@ describe("policy and decision", () => {
     expect(resolveEvolutionPolicy("auto").mode).toBe("propose");
     expect(resolveEvolutionPolicy({ mode: "apply", apply: "automatic" }).mode).toBe("apply");
     expect(resolveEvolutionPolicy({ gate: { repetitions: 3 } }).repetitions).toBe(3);
+    expect(resolveEvolutionPolicy({ maintainer: { isolated: false } }).isolated).toBe(false);
     expect(() => resolveEvolutionPolicy("autp")).toThrow("Invalid evolve mode");
   });
 
@@ -236,7 +237,9 @@ describe("durable evidence", () => {
     console.log = () => {};
     try {
       expect(runFeedbackCli(["distill", forgotten.id])).toBe(0);
-      expect(runFeedbackCli(["forget", forgotten.id])).toBe(0);
+      expect(runFeedbackCli(["forget", forgotten.id])).toBe(1);
+      expect(readEvidence().some((item) => item.id === forgotten.id)).toBe(true);
+      expect(runFeedbackCli(["forget", forgotten.id, "--yes"])).toBe(0);
     } finally {
       console.log = prior;
     }

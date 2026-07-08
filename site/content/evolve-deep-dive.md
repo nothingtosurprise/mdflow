@@ -49,8 +49,8 @@ Next: md evolve plan flows/review.md
 Feedback is private, bounded, and durable. Each item moves through `open →
 targeted → resolved | dismissed`; it is never consumed by a wall-clock
 watermark. `md feedback list`, `show`, `dismiss`, and `reopen` make that state
-visible; `forget` explicitly removes one item and its status history from
-private storage.
+visible; `md feedback forget <id> --yes` explicitly removes one item and its
+status history from private storage.
 
 `md evolve prune --days 30` removes older unapplied attempts and completed job
 logs after confirmation, while retaining applied rollback lineage.
@@ -188,6 +188,7 @@ evolve:
   maintainer:
     engine: claude
     model: opus
+    isolated: true
     timeout-ms: 180000
   budget:
     max-invocations: 9

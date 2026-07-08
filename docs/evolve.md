@@ -67,7 +67,7 @@ md feedback list [flow.md]
 md feedback show <feedback-id>
 md feedback dismiss <feedback-id>
 md feedback reopen <feedback-id>
-md feedback forget <feedback-id>   # explicit permanent privacy deletion
+md feedback forget <feedback-id> --yes  # explicit permanent privacy deletion
 ```
 
 Normal status changes append records. `forget` is the deliberate exception: it
@@ -95,6 +95,7 @@ evolve:
   maintainer:
     engine: claude
     model: opus
+    isolated: true
     timeout-ms: 180000
   budget:
     max-invocations: 9

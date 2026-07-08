@@ -70,7 +70,7 @@ const DEMOS = [
                 title="zsh"
                 lines={[
                     { id: '1', type: 'input', content: 'md eval review.md' },
-                    { id: '2', type: 'info', content: 'review.md: 1 case × 1 flow run each = 1 engine turn' },
+                    { id: '2', type: 'info', content: 'review.md: 1 case × 1 flow run each = 1 flow invocation' },
                     { id: '3', type: 'output', content: '  ✓ flags the planted bug' },
                     { id: '4', type: 'output', content: '1/1 passed' },
                     { id: '5', type: 'info', content: 'clean run recorded in trust ledger' }
@@ -281,7 +281,7 @@ export default function App() {
         {/* The concrete mental model: ./flows is your repo's agent roster */}
         <FlowsRoster />
 
-        {/* The hero's promise, mechanized: evidence-gated auto-evolution */}
+        {/* The hero's promise, mechanized: evidence-gated proposals */}
         <Evolve />
 
         {/* Agent-first: copy/paste prompts are the primary onboarding */}

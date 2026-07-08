@@ -139,6 +139,7 @@ Never describe Evolve as self-editing or auto-applying. Follow this sequence:
 md feedback flows/review.md "missed the renamed-file regression"
 md feedback show <feedback-id>
 md feedback distill <feedback-id>   # private, deliberately failing draft
+md feedback forget <feedback-id> --yes  # permanent privacy deletion
 md eval flows/review.md --plan
 md evolve plan flows/review.md      # free; shows proof, capabilities, cost, writes
 md evolve propose flows/review.md   # paid only after consent

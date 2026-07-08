@@ -20,7 +20,7 @@ Supported subcommands:
 | `md create [name]` | Create a new agent file. |
 | `md explain <agent.md>` | Print resolved config and prompt without execution. |
 | `md eval <flow.md> [--plan] [--yes] [--filter <text>] [--json]` | Preview or run the flow's executable colocated eval suite (`<flow>.eval.ts`). Cost includes repetitions and is printed before consent. |
-| `md feedback <flow.md> "<message>"` | Record durable, private evidence with a stable ID (free). `list`, `show`, `distill`, `dismiss`, `reopen`, and explicit permanent `forget` manage its lifecycle/privacy. |
+| `md feedback <flow.md> "<message>"` | Record durable, private evidence with a stable ID (free). `list`, `show`, `distill`, `dismiss`, `reopen`, and explicit permanent `forget <id> --yes` manage its lifecycle/privacy. |
 | `md complain ...` | Compatibility alias for `md feedback`. |
 | `md evolve plan\|status\|propose <flow.md> [--yes] [--engine <e>] [--json\|--events]` | Plan for free or create a private, capability-checked, off-path proposal. Source remains unchanged. |
 | `md evolve show\|review\|apply\|reject\|retry\|rollback <run-id>` | Inspect the receipt/diff, make an explicit decision, retry, or perform hash-guarded apply/rollback. |

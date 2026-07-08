@@ -312,14 +312,16 @@ export function buildMaintainerPrompt(input: DraftInput): string {
 
 export function makeEngineDrafter(
   engine: string,
-  options: { cwd?: string; model?: string; timeoutMs?: number } = {}
+  options: { cwd?: string; model?: string; timeoutMs?: number; isolated?: boolean } = {}
 ): CandidateDrafter {
   return async (input) => {
     const adapter = getEngineAdapter(engine);
     const fullConfig = await loadFullConfig(options.cwd ?? process.cwd());
     const commandDefaults = getCommandDefaultsFromConfig(fullConfig, engine) ?? {};
     let frontmatter = applyDefaults(commandDefaults, adapter.getDefaults());
-    frontmatter = applyIsolationDefaults(frontmatter, undefined, resolveIsolationDefaults(adapter, engine).defaults);
+    if (options.isolated !== false) {
+      frontmatter = applyIsolationDefaults(frontmatter, undefined, resolveIsolationDefaults(adapter, engine).defaults);
+    }
     if (options.model) frontmatter.model = options.model;
     const positionalMappings = extractPositionalMappings(frontmatter);
     const args = buildArgs(frontmatter, new Set<string>(), engine);
@@ -540,7 +542,7 @@ export async function runEvolve(options: EvolveRunOptions): Promise<EvolveRunRes
     cases: staticPlan.cases.length,
     evalInvocations,
     verificationCurrent,
-    maintainer: { engine: resolvedMaintainer, model, source: maintainerSource, isolated: true },
+    maintainer: { engine: resolvedMaintainer, model, source: maintainerSource, isolated: policy.isolated },
     plannedInvocations,
     capabilityPolicy: policy.allowCapabilityDelta ? "review private additions" : "no additions",
     writes: "private artifact only",
@@ -551,7 +553,7 @@ export async function runEvolve(options: EvolveRunOptions): Promise<EvolveRunRes
   log(`coverage: ${coveredEvidenceIds.length}/${evidenceIds.size} feedback item(s) linked to eval cases`);
   log(`suite: ${staticPlan.cases.length} case(s), ${evalInvocations} invocation(s) per side; receipt ${verificationCurrent ? "current" : "not current"}`);
   log(`writes: private evolution artifact only; source remains unchanged`);
-  log(`maintainer: ${resolvedMaintainer}${model ? `/${model}` : ""} via ${maintainerSource} (isolated)`);
+  log(`maintainer: ${resolvedMaintainer}${model ? `/${model}` : ""} via ${maintainerSource} (${policy.isolated ? "isolated" : "ambient by policy"})`);
 
   if (options.checkOnly) return { exitCode: 0, decision, applied: false };
 
@@ -615,7 +617,7 @@ export async function runEvolve(options: EvolveRunOptions): Promise<EvolveRunRes
       currentHash: sha256(original),
       evidenceIds: evidence.complaints.map((item) => item.id),
       targetEvidenceIds: [],
-      maintainer: { engine: resolvedMaintainer, model, source: maintainerSource },
+      maintainer: { engine: resolvedMaintainer, model, source: maintainerSource, isolated: policy.isolated },
       plannedInvocations,
       actualInvocations: 0,
     });
@@ -675,6 +677,7 @@ export async function runEvolve(options: EvolveRunOptions): Promise<EvolveRunRes
       cwd: dirname(flowPath),
       model,
       timeoutMs: policy.timeoutMs,
+      isolated: policy.isolated,
     });
     let body: string | null;
     try {
@@ -935,14 +938,14 @@ export function runComplainCli(args: string[]): number {
 
 function runFeedbackCliImpl(args: string[]): number {
   const json = jsonFlag(args);
-  const filtered = args.filter((item) => item !== "--json" && item !== "--last");
+  const filtered = args.filter((item) => item !== "--json" && item !== "--last" && item !== "--yes");
   const action = filtered[0];
   if (args.includes("--help") || args.includes("-h")) {
     console.log('Usage: md feedback <flow.md> "what went wrong" [--json]');
     console.log("       md feedback list [flow.md]");
     console.log("       md feedback show <feedback-id>");
     console.log("       md feedback distill <feedback-id>");
-    console.log("       md feedback forget <feedback-id>");
+    console.log("       md feedback forget <feedback-id> --yes");
     console.log("       md feedback dismiss|reopen <feedback-id>");
     return 0;
   }
@@ -983,7 +986,13 @@ function runFeedbackCliImpl(args: string[]): number {
   if (action === "forget") {
     const id = filtered[1];
     if (!id) {
-      console.error("Usage: md feedback forget <feedback-id>");
+      console.error("Usage: md feedback forget <feedback-id> --yes");
+      return 1;
+    }
+    if (!args.includes("--yes")) {
+      emit(json
+        ? { error: { reasonCode: "CONFIRMATION_REQUIRED", message: "Permanent feedback deletion requires --yes." } }
+        : "Refusing permanent feedback deletion without --yes.", json);
       return 1;
     }
     const forgotten = forgetEvidence(id);
@@ -1031,7 +1040,7 @@ export default [
     console.error("       md feedback list [flow.md]");
     console.error("       md feedback show <feedback-id>");
     console.error("       md feedback distill <feedback-id>");
-    console.error("       md feedback forget <feedback-id>");
+    console.error("       md feedback forget <feedback-id> --yes");
     console.error("       md feedback dismiss|reopen <feedback-id>");
     return 1;
   }
