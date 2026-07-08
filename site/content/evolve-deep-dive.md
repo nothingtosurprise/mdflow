@@ -6,7 +6,7 @@ source: https://tropic-hill-p35c.here.now/
 
 # Flows that improve themselves — gated on proof
 
-`mdflow v3 · evolve: auto`
+`mdflow v4 · evolve: auto`
 
 **Auto-evolution** lets an mdflow flow redraft its own prompt from real complaints, and applies the new draft only when the eval suite proves it is clean and no worse than before.
 
@@ -14,7 +14,7 @@ source: https://tropic-hill-p35c.here.now/
 
 ## What mdflow is
 
-mdflow (`md`) runs AI agents defined as markdown files — **flows**. YAML frontmatter becomes CLI flags for an engine (claude, codex, copilot, pi, …); the body is the prompt. Flows live in `./flows` and earn behavioral eval suites (`<flow>.eval.ts`, run with `md eval`). Results land in a **trust ledger**, where a full clean pass stamps `lastCleanAt`. Auto-evolution is what a flow does with that proof: it turns everyday dissatisfaction into a measured, reversible prompt upgrade.
+mdflow (`md`) runs AI agents defined as markdown files — **flows**. YAML frontmatter becomes CLI flags for an engine (claude, codex, copilot, pi, …); the body is the prompt. Flows live in `./flows` and earn behavioral eval suites (`<flow>.eval.ts`, run with `md eval`). Results land in a **trust ledger**, where a full clean pass stamps `lastCleanAt`. Auto-evolution turns everyday dissatisfaction into a reversible prompt revision guarded against suite regressions.
 
 ## Five stages, evidence to outcome
 
@@ -32,9 +32,9 @@ Refuses without an eval suite (*evolution is gated on proof*). Refuses without f
 
 One engine turn redrafts the prompt **body only** — the mutation surface is data, not code. Complaints are framed as untrusted evidence. The reply is accepted only if it holds *exactly one* fenced block, closing fence on its own line, non-empty body.
 
-### 4 · Gate — benefit is measured, not hoped
+### 4 · Gate — regression is measured
 
-The ancestor is scored on its own suite first (baseline). Then the candidate runs the same full suite. Accepted only if it is clean **and no worse than baseline**: `benefit: ancestor 0/1 → candidate 1/1`.
+The ancestor is scored on its own suite first (baseline). Then the candidate runs the same full suite. Accepted only if it is clean **and no worse than baseline**: `benefit: ancestor 0/1 → candidate 1/1`. That proves the candidate against the suite; it proves the complaint was fixed only when an eval case represents that complaint.
 
 ### 5 · Outcome — applied for review, or byte-identical revert
 
@@ -146,10 +146,10 @@ The frontmatter opt-in is the standing consent. After each successful run, a qui
 
 > Everything is gated on proof.
 
-> Benefit is a measurement, not a hope.
+> Regression is measured. Improvement becomes proof when the complaint is an eval.
 
 ---
 
 [→ mdflow.dev](https://mdflow.dev) · [→ github.com/johnlindquist/mdflow](https://github.com/johnlindquist/mdflow)
 
-*mdflow v3 — your flows learn from use. Prompts evolve; frontmatter is frozen; nothing ships without proof.*
+*mdflow v4 — complaints can drive prompt revisions; frontmatter is frozen; auto-apply remains gated by the eval suite.*

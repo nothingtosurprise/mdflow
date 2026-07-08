@@ -72,10 +72,6 @@ keys. See the v3 commit series for details.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 
-# Conflicts:
-#	CHANGELOG.md
-#	package.json
-
 # [3.0.0](https://github.com/johnlindquist/mdflow/compare/v2.35.5...v3.0.0) (2026-07-06)
 
 
@@ -124,9 +120,6 @@ keys. See the v3 commit series for details.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 
-# Conflicts:
-#	CHANGELOG.md
-#	package.json
 * docs and examples now describe v3 semantics (engine:,
 default engine pi, document rule for frontmatter-less files).
 
@@ -139,7 +132,6 @@ deprecated aliases. resolveCommand() no longer throws for missing commands.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 
-||||||| 31696e7
 # [3.0.0-next.2](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.1...v3.0.0-next.2) (2026-07-05)
 
 

@@ -6,7 +6,11 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { resolveIsolationMode, resolveIsolationDefaults } from "./isolation";
+import {
+  applyIsolationDefaults,
+  resolveIsolationMode,
+  resolveIsolationDefaults,
+} from "./isolation";
 import { applyDefaults } from "./config";
 import { buildArgs } from "./command";
 import { claudeAdapter } from "./adapters/claude";
@@ -155,6 +159,31 @@ describe("isolation precedence: config defaults < isolation < frontmatter", () =
     const cfgIdx = args.indexOf("--config");
     expect(cfgIdx).toBeGreaterThanOrEqual(0);
     expect(args[cfgIdx + 1]).toBe("project_doc_max_bytes=0");
+  });
+
+  test("codex repeatable config preserves project, isolation, and flow entries", () => {
+    const isolation = resolveIsolationDefaults(codexAdapter, "codex").defaults;
+    const merged = applyIsolationDefaults(
+      { config: 'model_reasoning_effort="medium"' },
+      { _subcommand: "exec", config: ["profile=project"] },
+      isolation
+    );
+
+    expect(merged.config).toEqual([
+      "profile=project",
+      "project_doc_max_bytes=0",
+      'model_reasoning_effort="medium"',
+    ]);
+
+    const args = buildArgs(merged, new Set(), "codex");
+    const configValues = args.flatMap((arg, index) =>
+      arg === "--config" ? [args[index + 1]] : []
+    );
+    expect(configValues).toEqual([
+      "profile=project",
+      "project_doc_max_bytes=0",
+      'model_reasoning_effort="medium"',
+    ]);
   });
 });
 

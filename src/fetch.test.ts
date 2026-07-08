@@ -1,8 +1,4 @@
-import { describe, it, expect, mock, beforeEach, afterEach, test } from "bun:test";
-
-// Skip network-dependent tests in CI environments to avoid flakiness
-const isCI = process.env.CI === "true";
-const describeNetwork = isCI ? describe.skip : describe;
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import {
   fetchWithTimeout,
   fetchWithRetry,
@@ -15,6 +11,31 @@ import {
   DEFAULT_TIMEOUT_MS,
   DEFAULT_RETRY_CONFIG,
 } from "./fetch";
+
+let server: ReturnType<typeof Bun.serve>;
+let baseUrl: string;
+
+beforeAll(() => {
+  server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/slow") {
+        await Bun.sleep(100);
+        return new Response("slow");
+      }
+      if (path === "/missing") return new Response("missing", { status: 404 });
+      if (path === "/node-gitignore") return new Response("node_modules\n.env\n");
+      return Response.json({ id: 1 });
+    },
+  });
+  baseUrl = `http://127.0.0.1:${server.port}`;
+});
+
+afterAll(() => {
+  server.stop(true);
+});
 
 describe("fetch utilities", () => {
   describe("isRetryableError", () => {
@@ -139,25 +160,23 @@ describe("fetch utilities", () => {
     });
   });
 
-  describeNetwork("fetchWithTimeout", () => {
+  describe("fetchWithTimeout", () => {
     it("successfully fetches when request completes before timeout", async () => {
-      // Use jsonplaceholder - reliable and fast
-      const response = await fetchWithTimeout("https://jsonplaceholder.typicode.com/posts/1", {
-        timeoutMs: 10000,
+      const response = await fetchWithTimeout(`${baseUrl}/ok`, {
+        timeoutMs: 1000,
       });
       expect(response.ok).toBe(true);
     });
 
     it("throws FetchTimeoutError when request exceeds timeout", async () => {
-      // Use an unreachable IP to trigger timeout (10.255.255.1 is non-routable)
       try {
-        await fetchWithTimeout("http://10.255.255.1:12345/", {
-          timeoutMs: 100,
+        await fetchWithTimeout(`${baseUrl}/slow`, {
+          timeoutMs: 20,
         });
         expect.unreachable("Should have thrown FetchTimeoutError");
       } catch (error) {
         expect(error instanceof FetchTimeoutError).toBe(true);
-        expect((error as FetchTimeoutError).message).toContain("timed out after 100ms");
+        expect((error as FetchTimeoutError).message).toContain("timed out after 20ms");
       }
     });
   });
@@ -168,24 +187,23 @@ describe("fetch utilities", () => {
     });
   });
 
-  describeNetwork("fetchWithRetry", () => {
+  describe("fetchWithRetry", () => {
     it("succeeds on first attempt for successful requests", async () => {
-      const response = await fetchWithRetry("https://jsonplaceholder.typicode.com/posts/1", {
+      const response = await fetchWithRetry(`${baseUrl}/ok`, {
         retry: { maxRetries: 3 },
       });
       expect(response.ok).toBe(true);
     });
 
     it("returns response for non-retryable 4xx errors without retrying", async () => {
-      // jsonplaceholder returns 404 for non-existent posts
-      const response = await fetchWithRetry("https://jsonplaceholder.typicode.com/posts/99999999", {
+      const response = await fetchWithRetry(`${baseUrl}/missing`, {
         retry: { maxRetries: 3 },
       });
       expect(response.status).toBe(404);
     });
 
     it("can disable retries with retry: false", async () => {
-      const response = await fetchWithRetry("https://jsonplaceholder.typicode.com/posts/1", {
+      const response = await fetchWithRetry(`${baseUrl}/ok`, {
         retry: false,
       });
       expect(response.ok).toBe(true);
@@ -201,23 +219,23 @@ describe("fetch utilities", () => {
     });
   });
 
-  describeNetwork("resilientFetch", () => {
+  describe("resilientFetch", () => {
     it("successfully fetches with both timeout and retry protection", async () => {
-      const response = await resilientFetch("https://jsonplaceholder.typicode.com/posts/1", {
-        timeoutMs: 10000,
+      const response = await resilientFetch(`${baseUrl}/ok`, {
+        timeoutMs: 1000,
         retry: { maxRetries: 2 },
       });
       expect(response.ok).toBe(true);
     });
 
     it("handles 404 response (non-retryable)", async () => {
-      const response = await resilientFetch("https://jsonplaceholder.typicode.com/posts/99999999");
+      const response = await resilientFetch(`${baseUrl}/missing`);
       expect(response.status).toBe(404);
       expect(response.ok).toBe(false);
     });
 
     it("can disable retries with retry: false", async () => {
-      const response = await resilientFetch("https://jsonplaceholder.typicode.com/posts/1", {
+      const response = await resilientFetch(`${baseUrl}/ok`, {
         retry: false,
       });
       expect(response.ok).toBe(true);
@@ -225,9 +243,8 @@ describe("fetch utilities", () => {
 
     it("throws FetchTimeoutError on timeout", async () => {
       try {
-        // Use unreachable IP to trigger timeout
-        await resilientFetch("http://10.255.255.1:12345/", {
-          timeoutMs: 100,
+        await resilientFetch(`${baseUrl}/slow`, {
+          timeoutMs: 20,
           retry: false, // Disable retries to speed up test
         });
         expect.unreachable("Should have thrown");
@@ -238,10 +255,9 @@ describe("fetch utilities", () => {
 
     it("throws FetchRetryError after exhausting retries on timeout", async () => {
       try {
-        // Use unreachable IP to trigger timeout
-        await resilientFetch("http://10.255.255.1:12345/", {
-          timeoutMs: 100,
-          retry: { maxRetries: 1, initialDelayMs: 50 },
+        await resilientFetch(`${baseUrl}/slow`, {
+          timeoutMs: 20,
+          retry: { maxRetries: 1, initialDelayMs: 1 },
         });
         expect.unreachable("Should have thrown");
       } catch (error) {
@@ -253,11 +269,10 @@ describe("fetch utilities", () => {
     });
   });
 
-  describeNetwork("integration with mdflow use cases", () => {
-    it("fetches GitHub raw content", async () => {
-      // Test fetching a well-known, stable GitHub file
+  describe("integration with mdflow use cases", () => {
+    it("fetches raw text content with request headers", async () => {
       const response = await resilientFetch(
-        "https://raw.githubusercontent.com/github/gitignore/main/Node.gitignore",
+        `${baseUrl}/node-gitignore`,
         {
           headers: {
             "User-Agent": "mdflow/1.0",
@@ -271,7 +286,7 @@ describe("fetch utilities", () => {
     });
 
     it("handles JSON response", async () => {
-      const response = await resilientFetch("https://jsonplaceholder.typicode.com/posts/1", {
+      const response = await resilientFetch(`${baseUrl}/ok`, {
         headers: {
           Accept: "application/json",
         },

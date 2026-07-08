@@ -14,7 +14,7 @@ import { existsSync } from "fs";
 import { join, dirname, resolve } from "path";
 import { parseFrontmatter } from "./parse";
 import {
-  resolveCommand, buildArgs, extractPositionalMappings,
+  resolveEngine, buildArgs, extractPositionalMappings,
   extractEnvVars, hasInteractiveMarker,
 } from "./command";
 import {
@@ -22,7 +22,11 @@ import {
   applyDefaults, applyInteractiveMode, BUILTIN_DEFAULTS, getConfigFile,
 } from "./config";
 import { getAdapter as getEngineAdapter } from "./adapters";
-import { resolveIsolationMode, resolveIsolationDefaults } from "./isolation";
+import {
+  applyIsolationDefaults,
+  resolveIsolationMode,
+  resolveIsolationDefaults,
+} from "./isolation";
 import { extractSystemPromptSpec, applySystemPromptToFrontmatter } from "./system-prompt";
 import { expandContentImports, hasContentImports } from "./imports";
 import { substituteTemplateVars, extractTemplateVars } from "./template";
@@ -80,7 +84,11 @@ function findProjectConfigPath(cwd: string): string | null {
   return null;
 }
 
-export async function analyzeAgent(filePath: string, passthroughArgs: string[] = []): Promise<ExplainResult> {
+export async function analyzeAgent(
+  filePath: string,
+  passthroughArgs: string[] = [],
+  cwd: string = process.cwd()
+): Promise<ExplainResult> {
   let localFilePath = filePath;
   let isRemote = false;
 
@@ -94,19 +102,36 @@ export async function analyzeAgent(filePath: string, passthroughArgs: string[] =
   const content = await Bun.file(localFilePath).text();
   const { frontmatter: originalFrontmatter, body: rawBody } = parseFrontmatter(content);
 
-  let command: string, commandSource: string;
-  const cmdIdx = passthroughArgs.findIndex((a) => a === "--_command" || a === "-_c");
-  if (cmdIdx !== -1 && cmdIdx + 1 < passthroughArgs.length) {
-    command = passthroughArgs[cmdIdx + 1]!;
-    commandSource = "CLI flag (--_command)";
-  } else {
-    command = resolveCommand(localFilePath);
-    commandSource = `Filename pattern (.${command}.md)`;
-  }
-
   const globalConfig = await loadGlobalConfig();
-  const projectConfig = await loadProjectConfig(process.cwd());
-  const fullConfig = await loadFullConfig(process.cwd());
+  const projectConfig = await loadProjectConfig(cwd);
+  const fullConfig = await loadFullConfig(cwd);
+
+  let command: string, commandSource: string;
+  const engineIdx = passthroughArgs.indexOf("--engine");
+  const deprecatedEngineIdx = passthroughArgs.findIndex(
+    (arg) => arg === "--_command" || arg === "-_c" || arg === "--tool"
+  );
+  const cliEngineIdx = engineIdx !== -1 ? engineIdx : deprecatedEngineIdx;
+  if (cliEngineIdx !== -1 && cliEngineIdx + 1 < passthroughArgs.length) {
+    command = passthroughArgs[cliEngineIdx + 1]!;
+    commandSource = `CLI flag (${passthroughArgs[cliEngineIdx]})`;
+  } else {
+    const resolved = resolveEngine(localFilePath, originalFrontmatter as AgentFrontmatter, {
+      configEngine: fullConfig.engine,
+    });
+    command = resolved.engine;
+    commandSource = resolved.source === "filename"
+      ? `Filename pattern (.${command}.md)`
+      : resolved.source === "frontmatter"
+        ? "Agent frontmatter (engine:)"
+        : resolved.source === "config"
+          ? projectConfig.engine
+            ? "Project config (engine:)"
+            : "Global config (engine:)"
+          : resolved.source === "env"
+            ? "Environment (MDFLOW_ENGINE)"
+            : "Built-in default";
+  }
 
   const builtinDefaults = BUILTIN_DEFAULTS.commands?.[command];
   const globalDefaults = globalConfig.commands?.[command];
@@ -129,12 +154,13 @@ export async function analyzeAgent(filePath: string, passthroughArgs: string[] =
     commandDefaults: fullDefaults,
   });
   const isolationInfo = resolveIsolationDefaults(engineAdapter, command);
-  let effectiveDefaults = fullDefaults;
-  if (isolationMode.isolated && !isolationInfo.unsupportedWarning) {
-    effectiveDefaults = { ...(fullDefaults ?? {}), ...isolationInfo.defaults };
-  }
-
-  let frontmatter = applyDefaults(originalFrontmatter as AgentFrontmatter, effectiveDefaults);
+  let frontmatter = isolationMode.isolated && !isolationInfo.unsupportedWarning
+    ? applyIsolationDefaults(
+        originalFrontmatter as AgentFrontmatter,
+        fullDefaults,
+        isolationInfo.defaults
+      )
+    : applyDefaults(originalFrontmatter as AgentFrontmatter, fullDefaults);
 
   const interactiveFromFilename = hasInteractiveMarker(localFilePath);
   const interactiveFromCli = passthroughArgs.includes("--_interactive") || passthroughArgs.includes("-_i");
@@ -184,7 +210,7 @@ export async function analyzeAgent(filePath: string, passthroughArgs: string[] =
   const fileDir = dirname(resolve(localFilePath));
   if (hasContentImports(rawBody)) {
     try {
-      expandedBody = await expandContentImports(rawBody, fileDir, new Set(), false, { invocationCwd: process.cwd() });
+      expandedBody = await expandContentImports(rawBody, fileDir, new Set(), false, { invocationCwd: cwd });
     } catch (err) {
       expandedBody = rawBody + `\n\n[Import expansion error: ${(err as Error).message}]`;
     }
@@ -211,7 +237,7 @@ export async function analyzeAgent(filePath: string, passthroughArgs: string[] =
   }
 
   const globalConfigPath = getConfigFile();
-  const projectConfigPath = findProjectConfigPath(process.cwd());
+  const projectConfigPath = findProjectConfigPath(cwd);
 
   if (isRemote) await cleanupRemote(localFilePath);
 
@@ -255,7 +281,7 @@ export function formatExplainOutput(result: ExplainResult): string {
   if (result.isolation.isolated) {
     const source = result.isolation.explicit ? "explicit" : "default";
     if (result.isolation.supported) {
-      lines.push(`ON (${source}) — the flow file is the entire behavior`);
+      lines.push(`ON (${source}) — ambient engine context is disabled; host capabilities remain available`);
       for (const [k, v] of Object.entries(result.isolation.flags)) {
         lines.push(`   ${k}: ${JSON.stringify(v)}`);
       }

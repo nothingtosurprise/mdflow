@@ -21,7 +21,7 @@ import { shaderAudio, NOTE_COLUMNS, NOTE_ROWS, BPM } from './shaderAudio';
  * Physics runs on the CPU each frame and is fed to the fragment shader via
  * uniform arrays. Renders black + mix-blend-screen, so it only adds light.
  *
- * Disabled for touch-only devices, prefers-reduced-motion, and missing WebGL.
+ * Disabled for small screens, prefers-reduced-motion, and missing WebGL.
  */
 
 const MAX_TARGETS = 4;
@@ -563,6 +563,9 @@ export const ShaderGuide: React.FC = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    // The game HUD and gesture layer compete with the product content on
+    // phone-sized screens. Keep the effect as a desktop enhancement.
+    if (window.matchMedia('(max-width: 767px)').matches) return;
     // touch devices run the full layer too — with a scroll-driven virtual
     // cursor, tap/hold/long-press gestures, and two-finger wall taps
     const coarse = !window.matchMedia('(pointer: fine)').matches;

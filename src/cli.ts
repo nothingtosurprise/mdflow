@@ -253,7 +253,7 @@ Config file example (~/.mdflow/config.yaml):
 
 md-specific flags (consumed, not passed to command):
   --engine          Specify the engine to run (deprecated aliases: --_command/-_c, --tool)
-  --_dry-run        Show resolved command and prompt without executing
+  --_dry-run        Show command/prompt plan; skip engine and inline commands
   --_edit           Open resolved prompt in $EDITOR before execution
   --_trust          Skip trust prompt for remote URLs (TOFU bypass)
   --_no-cache       Force fresh fetch for remote URLs (bypass cache)

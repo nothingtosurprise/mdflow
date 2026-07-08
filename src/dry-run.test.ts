@@ -164,6 +164,65 @@ ${tempDir}/executed-marker`
     expect(existsSync(`${tempDir}/executed-marker`)).toBe(false);
   });
 
+  test("dry-run does not execute inline shell commands or executable fences", async () => {
+    const inlineMarker = join(tempDir, "inline-command-marker");
+    const fenceMarker = join(tempDir, "executable-fence-marker");
+    const testFile = await createTestAgent(
+      tempDir,
+      "pure-plan.claude.md",
+      `---
+model: opus
+---
+Inline output:
+!\`touch ${inlineMarker}\`
+
+Fence output:
+\`\`\`sh
+#!/bin/sh
+touch ${fenceMarker}
+\`\`\``
+    );
+
+    const result = await spawnMd([testFile, "--_dry-run"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Dry Run");
+    expect(result.stdout).toContain("not executed");
+    expect(existsSync(inlineMarker)).toBe(false);
+    expect(existsSync(fenceMarker)).toBe(false);
+  });
+
+  test("remote trust is rejected before inline shell expansion", async () => {
+    const remoteProject = await createTempDir("md-remote-trust-order-");
+    const marker = join(remoteProject.tempDir, "remote-command-marker");
+    const content = `---
+engine: echo
+---
+Before approval:
+!\`touch ${marker}\``;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(content, {
+        headers: { "content-type": "text/markdown; charset=utf-8" },
+      }),
+    });
+
+    try {
+      const result = await spawnMd([`http://127.0.0.1:${server.port}/remote.md`], {
+        cwd: remoteProject.tempDir,
+        env: { HOME: remoteProject.tempDir },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Untrusted remote domain");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      server.stop(true);
+      await remoteProject.cleanup();
+    }
+  });
+
   test("unknown filename engine falls through the ladder with a warning (v3)", async () => {
     const testFile = await createTestAgent(
       tempDir,
@@ -199,5 +258,45 @@ Test prompt.`
     expect(result.stdout).toContain("--verbose");
     expect(result.stdout).toContain("--debug");
     expect(result.stdout).not.toContain("--_dry-run"); // Should be consumed, not shown
+  });
+
+  test("project codex profile keeps project, isolation, and flow config entries", async () => {
+    const project = await createTempDir("md-dry-run-codex-profile-");
+    try {
+      await writeFile(
+        join(project.tempDir, ".mdflow.yaml"),
+        `engine: codex
+commands:
+  codex:
+    config:
+      - profile=project
+`
+      );
+      const testFile = await createTestAgent(
+        project.tempDir,
+        "flow.md",
+        `---
+model: gpt-5.5
+sandbox: workspace-write
+config: model_reasoning_effort="medium"
+---
+Inspect the project`
+      );
+
+      const result = await spawnMd([testFile, "--_dry-run"], {
+        cwd: project.tempDir,
+        env: { HOME: project.tempDir },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("flow.md → codex (engine: config)");
+      expect(result.stdout).toContain("--ignore-user-config");
+      expect(result.stdout).toContain("--ephemeral");
+      expect(result.stdout).toContain("--config profile=project");
+      expect(result.stdout).toContain("--config project_doc_max_bytes=0");
+      expect(result.stdout).toContain('--config model_reasoning_effort="medium"');
+    } finally {
+      await project.cleanup();
+    }
   });
 });

@@ -27,7 +27,7 @@ import type {
 } from "../types";
 import { ensureBridgedPiAgentDir } from "./pi-auth";
 
-/** pi's hermetic flag set — applied by the default-on isolation layer. */
+/** pi's ambient-context disabling flags, applied by the isolation layer. */
 const PI_HERMETIC_FLAGS: CommandDefaults = {
   "no-extensions": true,
   "no-skills": true,

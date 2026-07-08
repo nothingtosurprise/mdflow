@@ -112,8 +112,7 @@ A `flows/site-audit.md` flow that imports `@./site/src/facts.json`,
 `@./docs/public-api.md`, and the site's content components, and asks the
 engine to list contradictions — with an eval case that plants a fake drift
 (e.g., a bogus flag in a fixture) and checks it gets flagged. The tool that
-promises "evals prove behavior" proving its own website is the story writing
-itself.
+uses evals to guard declared behavior should guard its own website contract.
 
 ## If the site stays in its own repo (fallback)
 

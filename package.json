@@ -1,6 +1,7 @@
 {
   "name": "mdflow",
   "version": "4.0.0",
+  "license": "MIT",
   "module": "src/index.ts",
   "type": "module",
   "repository": {
@@ -22,6 +23,9 @@
   ],
   "scripts": {
     "test": "bun test --bail=1",
+    "typecheck": "bunx tsc -p tsconfig.json --noEmit",
+    "package:check": "bun run scripts/package-smoke.ts",
+    "verify": "bun run typecheck && bun test && bun run facts:check && bun run package:check",
     "md": "bun run src/index.ts",
     "bundle": "bun run scripts/bundle.ts -o",
     "bundle:core": "bun run scripts/bundle.ts --core -o",

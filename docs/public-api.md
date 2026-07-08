@@ -38,7 +38,7 @@ These flags are consumed by mdflow and are not passed to underlying LLM CLIs.
 | Flag | Description |
 | --- | --- |
 | `--engine` | Select the engine explicitly (top rung of the resolution ladder). Deprecated aliases: `--_command`, `-_c`, `--tool`. |
-| `--_dry-run` | Print resolved command/prompt without execution. |
+| `--_dry-run` | Print the command plan and prompt without running the engine, inline `!command` imports, or executable code fences. File/URL/context imports are still resolved. |
 | `--_edit` | Open resolved prompt in `$EDITOR` before execution. |
 | `--_trust` | Skip TOFU trust prompt for remote URLs. |
 | `--_no-cache` | Bypass remote URL cache. |
@@ -115,7 +115,7 @@ Flows track which mdflow they work with, fully automatically:
 - After any successful local run, mdflow records the running version in
   `_compat` (added if missing; upgraded when the recorded version is behind
   on major or minor — patch/prerelease skew never rewrites files). Remote
-  flows and eval sandboxes are never stamped; failed stamps never affect
+  flows and eval workspaces are never stamped; failed stamps never affect
   the run.
 - On a major-version mismatch between the recorded version and the running
   mdflow, a dim one-line notice is printed to stderr; execution is never
@@ -216,6 +216,7 @@ Known error codes:
 | `TEMPLATE_PROCESSING_FAILED` | Liquid/template processing failed. |
 | `SECURITY_TRUST_FAILED` | Trust or security policy validation failed. |
 | `INPUT_LIMIT_EXCEEDED` | Input/context limit exceeded. |
+| `PROMPT_TOKEN_LIMIT` | Resolved prompt exceeded `_max_prompt_tokens`. |
 | `NETWORK_REQUEST_FAILED` | Generic network request failure. |
 | `HOOK_EXECUTION_FAILED` | Hook execution failed. |
 | `VALIDATION_FAILED` | Generic validation failure. |

@@ -1,12 +1,14 @@
 # mdflow
 
 ```bash
-review.md                        # v3: runs on your default engine (pi)
+review.md                        # Runs on your resolved engine (default: pi)
 review.claude.md                 # Pin an engine in the filename
 git diff | explain.md            # Pipe through any command
 ```
 
-**Your markdown files are now executable AI agents.**
+**A Git-native control plane for repeatable agent work.** Define each job as
+markdown, run it on the CLI engine you already use, inspect its inputs, and
+gate prompt revisions with behavioral evals.
 
 ```bash
 npx mdflow init
@@ -20,13 +22,13 @@ scaffolds the starter roster with zero engine turns.
 
 ---
 
-## New in v3
+## The agent control plane in your repo
 
-**Markdown agents that evolve.** One file per agent. Any engine. Evals that
-prove behavior. Every run makes them better.
+**Git-native agent workflows.** One file per job. Any engine. Evals that
+guard declared behavior. Complaints can drive regression-gated prompt revisions.
 
 - **`./flows` is your repo's agent roster.** One markdown agent per job:
-  code review, release notes, issue triage. Diffable in PRs, provable with
+  code review, release notes, issue triage. Diffable in PRs, checked with
   `md eval`, readable by every teammate, human or AI. Start one with
   `npx mdflow init`; the installable skill
   (`npx skills add johnlindquist/mdflow`) teaches your coding agent to build
@@ -38,18 +40,19 @@ prove behavior. Every run makes them better.
   Inspectable, never magic. Files with no frontmatter and no explicit engine
   are documents: `md README.md` prints instead of executing. The frontmatter
   key is now `engine:` (`tool:`/`_tool:` still work, with a warning).
-- **pi is the default engine**, runs hermetic (no ambient extensions,
-  skills, or context files), and bridges your Codex CLI login automatically.
-- **Isolation is the default, for every engine.** Flows run with the
+- **pi is the default engine**, runs without ambient extensions, skills, or
+  context files, and bridges your Codex CLI login automatically.
+- **Engine context isolation is the default, where supported.** Flows run with the
   engine's ambient context stripped using its own verified flags — claude
   `--safe-mode --no-session-persistence`, codex `--ignore-user-config
   --ephemeral -c project_doc_max_bytes=0`, gemini `--extensions none`,
   copilot `--no-custom-instructions --disable-builtin-mcps`, opencode
-  `--pure`, pi its hermetic set. Skills/MCP/context a flow needs are
+  `--pure`, pi its context-isolation flags. Skills/MCP/context a flow needs are
   declared explicitly in frontmatter; `_isolated: false` opts back into
   ambient. Engines with no controls (droid, cursor-agent, agy) run ambient
-  and warn only on an explicit `_isolated: true` — never pretending. *The
-  flow file is the entire behavior.*
+  and warn only on an explicit `_isolated: true` — never pretending. This
+  does not sandbox the host filesystem, network, environment, or inline shell
+  commands; those remain explicit capabilities of the flow.
 - **System prompt as a first-class key:** `_system-prompt:` replaces the
   engine's system prompt, `_append-system-prompt:` appends (string or list).
   Translated per engine (claude/pi flags, codex `model_instructions_file` /
@@ -59,7 +62,7 @@ prove behavior. Every run makes them better.
   CLI successor; the old gemini adapter remains for Code Assist
   Standard/Enterprise).
 - **Evals:** `md eval flows/review.md` runs `flows/review.eval.ts`.
-  Behavioral cases in hermetic sandboxes, cost printed before running,
+  Behavioral cases in isolated temporary workspaces, cost printed before running,
   results in a trust ledger. *If a guardrail isn't covered by an eval, it's
   a wish.*
 - **Evolution:** `md complain flows/review.md "missed the race condition"`
@@ -67,13 +70,17 @@ prove behavior. Every run makes them better.
   and applies it only if the eval suite scores clean and no worse than the
   ancestor's baseline. Add `evolve: auto` to frontmatter for the full loop —
   gated on a proven-clean suite (`lastCleanAt`), never auto-applying to an
-  unproven one. *Benefit is a measurement, not a hope.*
+  unproven one. The gate measures suite regressions; a complaint becomes a
+  measured improvement only after it is represented by an eval case.
 
-See `docs/V3-FLOWS.md` for the full v3 design and what's coming (distill,
+See `docs/V3-FLOWS.md` for the historical v3 design record and roadmap (distill,
 tournament, routing), [`docs/public-api.md`](docs/public-api.md) for the
 stable CLI contract, and [`GUIDE-NEW-FEATURES.md`](GUIDE-NEW-FEATURES.md) for
 workflows (`_steps`), structured outputs (`_output`), context providers
 (`@git:diff`), the flow registry, `--json` mode, and run telemetry.
+
+Security-sensitive behavior is documented in [`SECURITY.md`](SECURITY.md).
+Contributions are welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
@@ -154,7 +161,7 @@ mdflow plan.claude.md | mdflow implement.codex.md
 
 ## Installation
 
-No install needed to start — bootstrap a flow roster in any repo:
+Start through `npx` to bootstrap a flow roster in any repo:
 
 ```bash
 npx mdflow init
@@ -168,8 +175,9 @@ npm install -g mdflow
 bun install && bun link
 ```
 
-mdflow runs on [Bun](https://bun.sh); `npx mdflow` offers to install it if
-it's missing.
+mdflow runs on [Bun](https://bun.sh). If Bun is missing, the interactive
+launcher offers to install it; non-interactive environments must install Bun
+first.
 
 ## Quick Start
 
@@ -776,7 +784,7 @@ Remote execution:
 
 md-specific flags (consumed, not passed to command):
   --engine          Specify the engine to run (deprecated aliases: --_command/-_c, --tool)
-  --_dry-run        Show resolved command and prompt without executing
+  --_dry-run        Show command/prompt plan; skip engine and inline commands
   --_edit           Open resolved prompt in $EDITOR before execution
   --_trust          Skip trust prompt for remote URLs (TOFU bypass)
   --_no-cache       Force fresh fetch for remote URLs (bypass cache)

@@ -1,6 +1,6 @@
 ---
 name: mdflow
-description: Build and maintain a project's ./flows directory, the agent roster. Each flow is one markdown file that runs as an AI agent (frontmatter + prompt body) on claude, codex, pi, cursor-agent, copilot, agy, or any CLI engine, with colocated evals that prove behavior. Use when the user asks to "create a flow", "add an agent to this repo", "set up ./flows", "make a markdown agent", or wants repeatable AI tasks with evals.
+description: Build and maintain a project's ./flows directory, the agent roster. Each flow is one markdown file that runs as an AI agent (frontmatter + prompt body) on claude, codex, pi, cursor-agent, copilot, agy, or any CLI engine, with colocated behavioral evals. Use when the user asks to "create a flow", "add an agent to this repo", "set up ./flows", "make a markdown agent", or wants repeatable AI tasks with evals.
 ---
 
 # mdflow: the ./flows agent roster
@@ -51,8 +51,10 @@ Rules:
    it a flow.
 2. Every flow gets `description:` frontmatter. Frontmatter is what marks a
    file as a flow instead of a document.
-3. Every flow gets a colocated `<name>.eval.ts` at birth. The creed: if a
-   guardrail isn't covered by an eval, it's a wish.
+3. Every production flow gets a colocated `<name>.eval.ts` before it is
+   trusted or evolved. The deterministic starter scaffold does not invent
+   project-specific proof; add the eval immediately after tailoring the flow.
+   The creed: if a guardrail isn't covered by an eval, it's a wish.
 4. Keep `flows/README.md` current. It's the index your future self and other
    agents read first.
 5. Pin the project's default engine in `.mdflow.yaml` (`engine: pi`,
@@ -64,7 +66,8 @@ Rules:
 You usually don't pick an engine per flow. The ladder does, most explicit
 first: `--engine` flag, `MDFLOW_ENGINE` env, filename (`review.claude.md`),
 frontmatter `engine:`, project `.mdflow.yaml`, then the default (`pi`, which
-runs hermetic and bridges the user's Codex CLI login automatically).
+runs with its ambient extensions and context disabled and bridges the user's
+Codex CLI login automatically).
 Implicit picks print a dim `review.md → pi (engine: config)` line on stderr.
 
 ## Context: go big, then measure
@@ -84,7 +87,7 @@ guess at size. Measure, every time:
 
 ```bash
 md flows/review.md --_context    # context tree: every import with token counts
-md flows/review.md --_dry-run    # full resolved prompt + estimated tokens
+md flows/review.md --_dry-run    # command plan + prompt; inline commands are skipped
 ```
 
 Show the user the token number before the first real run. For guardrails,
@@ -114,12 +117,14 @@ const cases: EvalCase[] = [
 export default cases;
 ```
 
-`md eval flows/review.md` runs each case in a hermetic temp dir and records
+`md eval flows/review.md` runs each case in an isolated temp workspace and records
 results in the trust ledger (`~/.mdflow/eval-results.json`). It prints the
 cost (one engine turn per case) before running; get the user's go-ahead.
 Check invariants (files, numbers, names), not exact wording. When a real run
 disappoints, write the failing eval case first, then edit the flow until
-`md eval` passes.
+`md eval` passes. The workspace isolation is not a network, process, or
+credential sandbox; the selected engine still receives the environment and
+capabilities its adapter allows.
 
 ## Workflow for "add an agent for X"
 
@@ -127,7 +132,9 @@ disappoints, write the failing eval case first, then edit the flow until
 2. Write `flows/<job>.md`: `description:` frontmatter, tight prompt body,
    rich imports for the context the job needs.
 3. Measure for free: `md flows/<job>.md --_context` for the token breakdown,
-   `--_dry-run` for the exact command and resolved prompt. Report the size.
+   `--_dry-run` for the command plan and safe prompt preview. Inline commands
+   and executable code fences are shown but not executed; file, URL, and
+   context-provider imports may still resolve. Report the size.
 4. Write `flows/<job>.eval.ts` with 1 to 3 behavioral cases.
 5. Update `flows/README.md`.
 6. Offer the paid steps: `md flows/<job>.md` (one turn) and

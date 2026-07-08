@@ -8,7 +8,12 @@
 
 import { parseFrontmatter } from "./parse";
 import { parseCliArgs, handleMaCommands } from "./cli";
-import type { AgentFrontmatter, FormInputs, StructuredOutputConfig } from "./types";
+import type {
+  AgentFrontmatter,
+  CommandDefaults,
+  FormInputs,
+  StructuredOutputConfig,
+} from "./types";
 import { detectAdhocCommand, createVirtualAgentContent, createVirtualFilename } from "./adhoc-command";
 import {
   isFormInputs,
@@ -36,10 +41,14 @@ import {
 } from "./context-dashboard";
 import { loadEnvFiles } from "./env";
 import {
-  loadGlobalConfig, loadFullConfig, getCommandDefaults, applyDefaults, applyInteractiveMode,
+  loadFullConfig, applyDefaults, applyInteractiveMode,
 } from "./config";
 import { getAdapter as getEngineAdapter } from "./adapters";
-import { resolveIsolationMode, resolveIsolationDefaults } from "./isolation";
+import {
+  applyIsolationDefaults,
+  resolveIsolationMode,
+  resolveIsolationDefaults,
+} from "./isolation";
 import { extractSystemPromptSpec, applySystemPromptToFrontmatter } from "./system-prompt";
 import {
   initLogger, getParseLogger, getTemplateLogger, getCommandLogger,
@@ -442,7 +451,7 @@ export class CliRunner {
   /**
    * After a successful run, record the running mdflow version in the flow's
    * `_compat` frontmatter key. Skipped for remote flows (the local file is a
-   * throwaway copy) and eval runs (hermetic sandboxes; MDFLOW_EVAL_RUN=1).
+   * throwaway copy) and eval runs (isolated workspaces; MDFLOW_EVAL_RUN=1).
    * Best-effort: a failed stamp never affects the run's outcome.
    */
   private stampCompatAfterSuccess(localFilePath: string, isRemote: boolean): void {
@@ -757,7 +766,9 @@ export class CliRunner {
     // Execute
     let finalRunArgs = args;
     if (frontmatter._subcommand) {
-      const subs = Array.isArray(frontmatter._subcommand) ? frontmatter._subcommand : [frontmatter._subcommand];
+      const subs = Array.isArray(frontmatter._subcommand)
+        ? frontmatter._subcommand.map(String)
+        : [String(frontmatter._subcommand)];
       finalRunArgs = [...subs, ...args];
     }
 
@@ -892,6 +903,27 @@ export class CliRunner {
     // Parse CLI flags
     const parsed = this.parseFlags(passthroughArgs);
 
+    // Remote execution trust must be decided before any import expansion.
+    // processAgent() materializes content and command inlines, so placing the
+    // TOFU gate after it would allow an untrusted remote flow to perform host
+    // work before the user has approved the source.
+    if (isRemote && !parsed.trustFlag) {
+      const fullConfig = await loadFullConfig(this.cwd);
+      const trustCommand = parsed.commandFromCli ?? resolveEngine(
+        localFilePath,
+        baseFrontmatter as AgentFrontmatter,
+        { configEngine: fullConfig.engine }
+      ).engine;
+      await this.handleTOFU(
+        filePath,
+        localFilePath,
+        trustCommand,
+        baseFrontmatter,
+        rawBody,
+        parsed.jsonMode
+      );
+    }
+
     // Context-only mode: show dashboard and exit without executing
     if (parsed.contextOnly) {
       if (shouldShowDashboard(rawBody)) {
@@ -920,8 +952,8 @@ export class CliRunner {
       let workflowRunArgs = args;
       if (frontmatter._subcommand) {
         const subcommands = Array.isArray(frontmatter._subcommand)
-          ? frontmatter._subcommand
-          : [frontmatter._subcommand];
+          ? frontmatter._subcommand.map(String)
+          : [String(frontmatter._subcommand)];
         workflowRunArgs = [...subcommands, ...args];
       }
 
@@ -938,10 +970,6 @@ export class CliRunner {
           isRemote,
           localFilePath
         );
-      }
-
-      if (isRemote && !parsed.trustFlag) {
-        await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody, parsed.jsonMode);
       }
 
       const shouldShowMenu = this.isStdinTTY && this.isStdoutTTY && !parsed.noMenu && !parsed.jsonMode;
@@ -1056,15 +1084,12 @@ export class CliRunner {
       getCommandLogger().debug({ originalLength: finalBody.length, editedLength: promptToRun.length }, "Prompt edited");
     }
 
-    // TOFU check
-    if (isRemote && !parsed.trustFlag) {
-      await this.handleTOFU(filePath, localFilePath, command, baseFrontmatter, rawBody, parsed.jsonMode);
-    }
-
     // Execute
     let finalRunArgs = args;
     if (frontmatter._subcommand) {
-      const subs = Array.isArray(frontmatter._subcommand) ? frontmatter._subcommand : [frontmatter._subcommand];
+      const subs = Array.isArray(frontmatter._subcommand)
+        ? frontmatter._subcommand.map(String)
+        : [String(frontmatter._subcommand)];
       finalRunArgs = [...subs, ...args];
     }
 
@@ -1467,13 +1492,13 @@ export class CliRunner {
 
     // Resolve the engine via the v3 ladder: CLI flag > env > filename >
     // frontmatter > config > built-in default.
+    const fullConfig = await loadFullConfig(this.cwd);
     let command: string;
     let engineSource: EngineSource = "cli";
     if (commandFromCli) {
       command = commandFromCli;
       getCommandLogger().debug({ command, source: "cli" }, "Engine from --engine flag");
     } else {
-      const fullConfig = await loadFullConfig(process.cwd());
       const resolved = resolveEngine(localFilePath, baseFrontmatter as AgentFrontmatter, {
         configEngine: fullConfig.engine,
       });
@@ -1524,10 +1549,10 @@ export class CliRunner {
       }
     }
 
-    await loadGlobalConfig();
-    const commandDefaults = await getCommandDefaults(command);
+    const commandDefaults = fullConfig.commands?.[command];
 
-    // Isolation (v3): ON BY DEFAULT — the flow file is the entire behavior.
+    // Engine context isolation is on by default where supported. This strips
+    // ambient agent configuration; it does not sandbox host capabilities.
     // The adapter's verified context-stripping flags layer between config
     // defaults and frontmatter, so an isolated flow can still re-enable one
     // layer (e.g. `safe-mode: false`); `_isolated: false` opts back into
@@ -1538,7 +1563,7 @@ export class CliRunner {
       cliValue: parsed.isolatedFromCli,
       commandDefaults,
     });
-    let effectiveDefaults = commandDefaults;
+    let isolationDefaults: CommandDefaults = {};
     if (isolationMode.isolated) {
       const isolation = resolveIsolationDefaults(engineAdapter, command);
       // Engines with no isolation controls run ambient; only an EXPLICIT
@@ -1547,10 +1572,16 @@ export class CliRunner {
         const dim = process.stderr.isTTY ? ["\x1b[2m", "\x1b[0m"] : ["", ""];
         this.writeStderr(`${dim[0]}${isolation.unsupportedWarning}${dim[1]}`);
       }
-      effectiveDefaults = { ...(commandDefaults ?? {}), ...isolation.defaults };
+      isolationDefaults = isolation.defaults;
     }
 
-    let frontmatter = applyDefaults(baseFrontmatter as AgentFrontmatter, effectiveDefaults);
+    let frontmatter = isolationMode.isolated
+      ? applyIsolationDefaults(
+          baseFrontmatter as AgentFrontmatter,
+          commandDefaults,
+          isolationDefaults
+        )
+      : applyDefaults(baseFrontmatter as AgentFrontmatter, commandDefaults);
     const interactiveFromFilename = hasInteractiveMarker(localFilePath);
     frontmatter = applyInteractiveMode(frontmatter, command, interactiveFromFilename || interactiveFromCli);
 
@@ -1679,6 +1710,7 @@ export class CliRunner {
         getImportLogger().debug({ fileDir, commandCwd }, "Phase 1: Expanding content imports");
         phase1Body = await expandContentImports(rawBody, fileDir, new Set(), false, {
           invocationCwd: commandCwd,
+          dryRun: parsed.dryRun,
         });
         getImportLogger().debug({ originalLength: rawBody.length, expandedLength: phase1Body.length }, "Phase 1 complete");
       } catch (err) {
@@ -1761,6 +1793,7 @@ export class CliRunner {
         phase3Body = await expandCommandImports(phase2Body, fileDir, false, {
           invocationCwd: commandCwd,
           templateVars,
+          dryRun: parsed.dryRun,
         });
         getImportLogger().debug({ expandedLength: phase3Body.length }, "Phase 3 complete");
       } catch (err) {

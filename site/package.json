@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "portless run --name mdflow vite",
     "dev:raw": "vite",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "vite build && node scripts/build-content.mjs",
+    "verify": "bun run typecheck && bun run build",
     "preview": "vite preview",
     "og-image": "node scripts/generate-og-image.mjs"
   },
@@ -21,8 +23,11 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.1.2",
+    "autoprefixer": "^10.4.21",
     "marked": "^18.0.5",
+    "postcss": "^8.5.6",
     "puppeteer": "^24.32.1",
+    "tailwindcss": "^3.4.17",
     "typescript": "~5.8.2",
     "vite": "^6.4.1"
   }

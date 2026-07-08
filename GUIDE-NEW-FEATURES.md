@@ -50,24 +50,26 @@ md task.copilot.md         # Translates to: copilot --model sonnet ...
 
 ### Override Provider at Runtime
 
-Use `--tool` (or `--_command`) to switch providers without renaming the file:
+Use `--engine` to switch providers without renaming the file (`--tool` and
+`--_command` remain deprecated aliases):
 
 ```bash
-md task.claude.md --tool gemini
+md task.claude.md --engine gemini
 ```
 
 Or set it in frontmatter:
 
 ```yaml
 ---
-_command: gemini
+engine: gemini
 model: gemini-2.5-pro
 ---
 ```
 
 ### Supported Adapters
 
-Claude, Codex, Gemini, Copilot, Droid, and OpenCode each have a dedicated adapter that maps canonical keys to their specific CLI flags.
+Claude, Codex, Gemini, Copilot, Droid, OpenCode, pi, cursor-agent, and agy each
+have a dedicated adapter that maps canonical keys to their specific CLI flags.
 
 ---
 
@@ -522,7 +524,7 @@ How it works:
   blocked — the next clean run re-verifies automatically.
 - **Never noisy**: stamps are surgical single-line frontmatter edits (the
   rest of the file is untouched, byte for byte), remote flows and eval
-  sandboxes are never stamped, and a failed stamp never affects the run.
+  workspaces are never stamped, and a failed stamp never affects the run.
 - Neither key is ever passed to the engine as a CLI flag, and a markdown
   file whose frontmatter contains only these stamps is still treated as a
   document, not an executable flow.
@@ -595,7 +597,7 @@ md review.claude.md --_resume
 | Flag | Feature |
 |------|---------|
 | `--json` | JSON output mode |
-| `--tool <name>` | Override provider |
+| `--engine <name>` | Override engine (`--tool` is a deprecated alias) |
 | `--_resume` | Resume workflow from cache |
 
 ### New Subcommands

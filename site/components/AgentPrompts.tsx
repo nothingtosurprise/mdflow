@@ -8,12 +8,13 @@ import { motion } from 'framer-motion';
  * paste. The agent does the rest.
  */
 
-const SETUP_PROMPT = `Start my repo's agent roster with mdflow v3:
+const SETUP_PROMPT = `Start my repo's agent roster with mdflow:
 
 1. Run \`npx mdflow init --yes\` in this repo. It scaffolds ./flows (starter flows + README roster) and .mdflow.yaml, spending zero engine turns — it never launches an agent in --yes mode.
 2. Tailor the generated flows to THIS repo: the right test command, the right diff scope, our vocabulary. Set .mdflow.yaml's engine to whichever CLI I have (pi, claude, codex, copilot, cursor-agent, agy).
-3. Verify for free: run \`md flows/review.md --_dry-run\` and show me the exact command plus which rung of the engine ladder won.
-4. Do NOT do a real run until I say go. Each run costs one engine turn.`;
+3. Add a colocated eval suite to every tailored production flow. Use 1 to 3 behavioral cases that check invariants, not exact wording.
+4. Verify for free: run \`md flows/review.md --_dry-run\` and show me the command plan plus which rung of the engine ladder won. Dry-run must not execute inline command imports.
+5. Do NOT do a real run or eval until I say go. A real run costs one engine turn; eval cost is one turn per case.`;
 
 const SKILL_COMMAND = `npx skills add johnlindquist/mdflow`;
 
@@ -25,7 +26,7 @@ const EVALS_PROMPT = `Give every flow in ./flows a colocated eval suite <flow>.e
 
 Creed: if a guardrail isn't covered by an eval, it's a wish.`;
 
-const MIGRATE_PROMPT = `Migrate my mdflow v2 files to v3:
+const MIGRATE_PROMPT = `Migrate my legacy mdflow v2 files to the current format:
 
 1. Move loose agent .md files into ./flows and add a flows/README.md roster index.
 2. Frontmatter \`tool:\` / \`_tool:\` becomes \`engine:\`. The \`--_command\` / \`--tool\` flags become \`--engine\`.
@@ -48,12 +49,12 @@ export const AgentPrompts: React.FC = () => {
                 >
                     <p className="font-mono text-xs uppercase tracking-[0.3em] text-blue-400 mb-4">Agent-first</p>
                     <h2 className="select-none font-display font-bold text-4xl md:text-6xl tracking-tighter text-white">
-                        DON'T INSTALL IT.<br />
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-300 to-white">DELEGATE IT.</span>
+                        LET YOUR AGENT<br />
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-300 to-white">SET IT UP.</span>
                     </h2>
                     <p className="mt-6 text-lg text-zinc-400 max-w-2xl mx-auto font-light">
                         You already have an agent open. Paste one of these and let it build your
-                        ./flows roster, wire the engines, and prove every agent with evals. You watch.
+                        ./flows roster, wire the engines, and add behavioral guardrails. You watch.
                     </p>
                 </motion.div>
 
@@ -81,13 +82,13 @@ export const AgentPrompts: React.FC = () => {
                         index={2}
                         accent="emerald"
                         title="Add evals to every flow"
-                        description="Behavioral suites in hermetic sandboxes. Cost quoted before a single turn is spent. Results land in the trust ledger."
+                        description="Behavioral suites in isolated temp workspaces. Cost quoted before a single turn is spent. Results land in the trust ledger."
                         prompt={EVALS_PROMPT}
                     />
                     <CopyPrompt
                         index={3}
                         accent="pink"
-                        title="Migrate v2 to v3"
+                        title="Migrate legacy flows"
                         description="Loose files move into ./flows, tool: becomes engine:, gemini becomes agy. Everything verified with free dry-runs."
                         prompt={MIGRATE_PROMPT}
                     />

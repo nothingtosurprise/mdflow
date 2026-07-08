@@ -6,9 +6,22 @@ import { join } from "node:path";
 import { ImportError } from "./errors";
 
 let testDir: string;
+let importServer: ReturnType<typeof Bun.serve>;
+let importBaseUrl: string;
 
 beforeAll(async () => {
   testDir = await mkdtemp(join(tmpdir(), "imports-test-"));
+  importServer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      return path.includes("users")
+        ? Response.json({ id: 1, name: "Leanne Graham" })
+        : Response.json({ id: 1, title: "Local fixture" });
+    },
+  });
+  importBaseUrl = `http://127.0.0.1:${importServer.port}`;
 
   // Create test files
   await Bun.write(join(testDir, "simple.md"), "Hello from simple.md");
@@ -23,6 +36,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  importServer.stop(true);
   await rm(testDir, { recursive: true });
 });
 
@@ -147,26 +161,25 @@ test("hasImports distinguishes emails from URL imports", () => {
 });
 
 test("expandImports fetches markdown URL", async () => {
-  // Use jsonplaceholder for testing - reliable API
-  const content = "Docs: @https://jsonplaceholder.typicode.com/posts/1";
+  const content = `Docs: @${importBaseUrl}/posts/1`;
   const result = await expandImports(content, testDir);
   expect(result).toContain("Docs:");
-  expect(result).not.toContain("@https://");
+  expect(result).not.toContain(`@${importBaseUrl}`);
 });
 
 test("expandImports fetches JSON URL", async () => {
-  const content = "Data: @https://jsonplaceholder.typicode.com/users/1";
+  const content = `Data: @${importBaseUrl}/users/1`;
   const result = await expandImports(content, testDir);
   expect(result).toContain("Data:");
-  expect(result).toContain("Leanne Graham"); // jsonplaceholder user 1 name
-  expect(result).not.toContain("@https://");
+  expect(result).toContain("Leanne Graham");
+  expect(result).not.toContain(`@${importBaseUrl}`);
 });
 
 test("expandImports preserves emails while expanding URLs", async () => {
-  const content = "Contact: admin@example.com\nDocs: @https://jsonplaceholder.typicode.com/posts/1";
+  const content = `Contact: admin@example.com\nDocs: @${importBaseUrl}/posts/1`;
   const result = await expandImports(content, testDir);
   expect(result).toContain("admin@example.com"); // Email preserved
-  expect(result).not.toContain("@https://"); // URL expanded
+  expect(result).not.toContain(`@${importBaseUrl}`); // URL expanded
 });
 
 // Line range import tests
@@ -692,11 +705,11 @@ describe("parallel import resolution", () => {
   test("parallel resolution with URL and file imports", async () => {
     await Bun.write(join(testDir, "with-url.md"), "Local file");
 
-    const content = "@./with-url.md @https://jsonplaceholder.typicode.com/posts/1";
+    const content = `@./with-url.md @${importBaseUrl}/posts/1`;
     const result = await expandImports(content, testDir);
 
     expect(result).toContain("Local file");
-    expect(result).not.toContain("@https://");
+    expect(result).not.toContain(`@${importBaseUrl}`);
   });
 
   test("concurrency limit of 1 processes sequentially", async () => {

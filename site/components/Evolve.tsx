@@ -25,7 +25,7 @@ const TRANSCRIPT: TerminalLine[] = [
     { id: 'e9', type: 'info', content: 'evolve: auto — 1 complaint since last evolution' },
     { id: 'e10', type: 'info', content: 'evolve: auto — cost: 1 maintainer + 2 eval turns = 3 turns' },
     { id: 'e11', type: 'info', content: 'evolve: auto — baseline ✓ 1/1 · drafting candidate…' },
-    { id: 'e12', type: 'info', content: 'evolve: auto — gate ✓ 1/1 · benefit: complaint addressed, zero regressions' },
+    { id: 'e12', type: 'info', content: 'evolve: auto — benefit: ancestor 1/1 → candidate 1/1' },
     { id: 'e13', type: 'output', content: 'evolve: auto — applied. Review with: git diff flows/answer.md' },
 ];
 
@@ -50,13 +50,13 @@ const GUARANTEES = [
     },
     {
         icon: Scale,
-        title: 'Benefit is a measurement',
-        body: 'The ancestor is scored on its own suite first. The candidate must come back clean and no worse — or it reverts byte-identical and parks as <flow>.pending.md.',
+        title: 'Regression is measured',
+        body: 'The ancestor is scored on its own suite first. The candidate must come back clean and no worse — or it reverts byte-identical and parks as <flow>.pending.md. A complaint is measured only when an eval covers it.',
     },
     {
         icon: Database,
         title: 'Real usage only',
-        body: 'Eval runs execute in sandboxes with the telemetry corpus redirected. Synthetic runs can never become the evidence that triggers an evolution.',
+        body: 'Eval runs execute in isolated temporary workspaces with the telemetry corpus redirected. These are test fixtures, not host security sandboxes. Synthetic runs can never trigger an evolution.',
     },
     {
         icon: FileLock2,
@@ -92,12 +92,12 @@ export const Evolve: React.FC = () => {
                     <p className="font-mono text-xs uppercase tracking-[0.3em] text-emerald-400 mb-4">evolve: auto</p>
                     <h2 className="select-none font-display font-bold text-4xl md:text-6xl tracking-tighter text-white">
                         COMPLAINTS IN.<br />
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-200 to-white">PROVEN DIFFS OUT.</span>
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-200 to-white">GATED DIFFS OUT.</span>
                     </h2>
                     <p className="mt-6 text-lg text-zinc-400 max-w-3xl mx-auto font-light leading-relaxed">
                         Tell a flow what went wrong — <span className="text-white font-mono text-base">md complain</span>,
                         or just re-run it within two minutes and mdflow takes the hint. A maintainer engine redrafts
-                        the prompt, the eval suite judges the result, and only a measured, no-regression revision
+                        the prompt, the eval suite judges the result, and only a suite-clean, no-regression revision
                         lands in your working tree.
                     </p>
                 </motion.div>

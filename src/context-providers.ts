@@ -161,8 +161,8 @@ async function runCommand(
   }
 
   const [stdout, stderr, exitCode] = await Promise.all([
-    proc.stdout ? new Response(proc.stdout).text() : "",
-    proc.stderr ? new Response(proc.stderr).text() : "",
+    proc.stdout ? new Response(proc.stdout as ReadableStream<Uint8Array>).text() : "",
+    proc.stderr ? new Response(proc.stderr as ReadableStream<Uint8Array>).text() : "",
     proc.exited,
   ]);
 

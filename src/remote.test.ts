@@ -1,11 +1,33 @@
-import { expect, test, describe, beforeEach, afterEach } from "bun:test";
+import { expect, test, describe, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import {
   isRemoteUrl,
   toRawUrl,
   fetchRemote,
-  type FetchRemoteOptions,
+  cleanupRemote,
 } from "./remote";
 import { clearAllCache, getCachedContent } from "./cache";
+
+let server: ReturnType<typeof Bun.serve>;
+let baseUrl: string;
+const remotePaths: string[] = [];
+
+beforeAll(() => {
+  server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response("---\ndescription: local remote fixture\n---\nHello\n"),
+  });
+  baseUrl = `http://127.0.0.1:${server.port}`;
+});
+
+afterAll(() => {
+  server.stop(true);
+});
+
+function remember(result: Awaited<ReturnType<typeof fetchRemote>>) {
+  if (result.localPath && result.isRemote) remotePaths.push(result.localPath);
+  return result;
+}
 
 describe("isRemoteUrl", () => {
   test("returns true for http URL", () => {
@@ -70,15 +92,13 @@ describe("fetchRemote", () => {
   });
 
   test("returns isRemote: true for http URLs", async () => {
-    // Use a URL that will fail (no network call needed for this test)
-    const result = await fetchRemote("http://nonexistent.invalid/file.md");
-    expect(result.isRemote).toBe(true);
-  });
-
-  test("returns isRemote: true for https URLs", async () => {
-    // Use a URL that will fail (no network call needed for this test)
-    const result = await fetchRemote("https://nonexistent.invalid/file.md");
-    expect(result.isRemote).toBe(true);
+    const result = await fetchRemote(`${baseUrl}/file.md`, { noCache: true });
+    try {
+      expect(result.isRemote).toBe(true);
+      expect(result.success).toBe(true);
+    } finally {
+      if (result.localPath) await cleanupRemote(result.localPath);
+    }
   });
 });
 
@@ -90,52 +110,42 @@ describe("fetchRemote caching", () => {
 
   afterEach(async () => {
     await clearAllCache();
+    await Promise.all(remotePaths.splice(0).map((path) => cleanupRemote(path)));
   });
 
   test("caches fetched content", async () => {
-    // Fetch a small public file
-    const url = "https://jsonplaceholder.typicode.com/posts/1";
-    const result = await fetchRemote(url);
+    const url = `${baseUrl}/cache.md`;
+    const result = remember(await fetchRemote(url));
 
-    // Should succeed (might fail if network is down, but that's OK for this test)
-    if (result.success) {
-      expect(result.fromCache).toBe(false);
+    expect(result.success).toBe(true);
+    expect(result.fromCache).toBe(false);
 
-      // Check that content was cached
-      const cached = await getCachedContent(toRawUrl(url));
-      expect(cached.hit).toBe(true);
-    }
+    const cached = await getCachedContent(toRawUrl(url));
+    expect(cached.hit).toBe(true);
   });
 
   test("returns cached content on second fetch", async () => {
-    const url = "https://jsonplaceholder.typicode.com/posts/1";
+    const url = `${baseUrl}/second.md`;
 
     // First fetch - should not be from cache
-    const result1 = await fetchRemote(url);
-    if (!result1.success) {
-      // Skip test if network is unavailable
-      return;
-    }
+    const result1 = remember(await fetchRemote(url));
     expect(result1.fromCache).toBe(false);
 
     // Second fetch - should be from cache
-    const result2 = await fetchRemote(url);
+    const result2 = remember(await fetchRemote(url));
     expect(result2.success).toBe(true);
     expect(result2.fromCache).toBe(true);
   });
 
   test("bypasses cache with noCache option", async () => {
-    const url = "https://jsonplaceholder.typicode.com/posts/1";
+    const url = `${baseUrl}/bypass.md`;
 
     // First fetch - populate cache
-    const result1 = await fetchRemote(url);
-    if (!result1.success) {
-      // Skip test if network is unavailable
-      return;
-    }
+    const result1 = remember(await fetchRemote(url));
+    expect(result1.success).toBe(true);
 
     // Second fetch with noCache - should not use cache
-    const result2 = await fetchRemote(url, { noCache: true });
+    const result2 = remember(await fetchRemote(url, { noCache: true }));
     expect(result2.success).toBe(true);
     expect(result2.fromCache).toBe(false);
   });

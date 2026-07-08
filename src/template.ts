@@ -11,7 +11,7 @@ export type TemplateVariableName = FrontmatterSystemKey;
 
 /** Key-value map used for template substitution. */
 export interface TemplateVars {
-  [key: string]: string;
+  [key: string]: unknown;
 }
 
 /** Options for template substitution behavior. */

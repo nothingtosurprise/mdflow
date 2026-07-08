@@ -23,8 +23,8 @@ function createFetchStub(
 ): { fetchFn: typeof fetch; calls: string[] } {
   const calls: string[] = [];
   const fetchFn: typeof fetch = (async (
-    input: RequestInfo | URL,
-    _init?: RequestInit
+    input: Parameters<typeof fetch>[0],
+    _init?: Parameters<typeof fetch>[1]
   ): Promise<Response> => {
     const url = typeof input === "string"
       ? input

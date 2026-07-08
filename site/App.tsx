@@ -29,11 +29,11 @@ const GithubMark: React.FC<{ size?: number }> = ({ size = 18 }) => (
     </svg>
 );
 
-// Demo Data for Split Sections - v3 features first, then composition
+// Demo Data for current flow primitives first, then composition
 const DEMOS = [
     {
         title: "The Engine Ladder",
-        subtitle: "v3 · No Filename Ceremony",
+        subtitle: "Engine Resolution · No Filename Ceremony",
         description: "The engine is environment, not filename ceremony. Bare review.md runs on your default engine (pi, bridging your Codex login automatically). Pin one per file, per shell, or per project. The ladder resolves it and tells you which rung won.",
         left: (
             <Editor
@@ -57,8 +57,8 @@ const DEMOS = [
     },
     {
         title: "Evals: Prove It",
-        subtitle: "v3 · Trust Ledger",
-        description: "If a guardrail isn't covered by an eval, it's a wish. Colocate review.eval.ts with your flow. Each case runs in a hermetic sandbox. The cost is printed before a single turn is spent. Clean runs are stamped in the trust ledger.",
+        subtitle: "Evals · Trust Ledger",
+        description: "If a guardrail isn't covered by an eval, it's a wish. Colocate review.eval.ts with your flow. Each case runs in an isolated temporary workspace. The cost is printed before a single turn is spent. Clean runs are stamped in the trust ledger.",
         left: (
             <Editor
                 filename="review.eval.ts"

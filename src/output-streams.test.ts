@@ -19,23 +19,33 @@ import {
 describe("Output Stream Separation", () => {
   let tempDir: string;
   let cleanup: () => Promise<void>;
+  let server: ReturnType<typeof Bun.serve>;
+  let remoteUrl: string;
 
   beforeAll(async () => {
     const temp = await createTempDir("md-streams-test-");
     tempDir = temp.tempDir;
     cleanup = temp.cleanup;
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response("# Local remote fixture\n"),
+    });
+    remoteUrl = `http://127.0.0.1:${server.port}/fixture.md`;
   });
 
   afterAll(async () => {
+    server.stop(true);
     await cleanup();
   });
 
   describe("remote.ts status messages", () => {
     test("fetchRemote outputs status to stderr, not stdout", async () => {
       const testScript = `
-        import { fetchRemote } from "${PROJECT_ROOT}/src/remote";
-        const result = await fetchRemote("https://raw.githubusercontent.com/johnlindquist/kit/main/README.md");
+        import { fetchRemote, cleanupRemote } from "${PROJECT_ROOT}/src/remote";
+        const result = await fetchRemote(${JSON.stringify(remoteUrl)}, { noCache: true });
         console.log(JSON.stringify({ success: result.success, isRemote: result.isRemote }));
+        if (result.localPath) await cleanupRemote(result.localPath);
       `;
 
       const result = await spawnTestScript(testScript, tempDir);

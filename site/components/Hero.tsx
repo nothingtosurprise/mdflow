@@ -101,8 +101,8 @@ export const Hero: React.FC = () => {
 
                         <p className="mt-8 text-lg lg:text-xl text-zinc-300 leading-relaxed font-light border-l-4 border-orange-500/50 pl-6">
                             One file per <span className="text-white font-semibold">agent</span>. Any engine.<br/>
-                            <span className="text-white font-semibold">Evals</span> that prove behavior.<br/>
-                            Every run makes them better.
+                            <span className="text-white font-semibold">Evals</span> that guard declared behavior.<br/>
+                            Complaints drive eval-gated revisions.
                         </p>
                     </motion.div>
 
@@ -133,7 +133,7 @@ export const Hero: React.FC = () => {
                         </div>
 
                         <p className="mt-5 max-w-xl text-sm text-zinc-500 leading-relaxed">
-                            No install needed — it opens your agent CLI (claude, codex, cursor-agent, agy, …)
+                            Start with npx — mdflow runs on Bun and opens your agent CLI (claude, codex, cursor-agent, agy, …)
                             with the setup guide, and the agent builds a <span className="font-mono text-zinc-400">./flows</span> roster
                             tailored to your repo. Scripting? <span className="font-mono text-zinc-400">--yes</span> scaffolds
                             it with zero engine turns.

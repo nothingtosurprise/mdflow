@@ -41,7 +41,7 @@ Process this input:
     );
 
     const result = await spawnMdWithPipe(agentFile, "hello world", [], {
-      env: { ...process.env },
+      env: { ...process.env } as Record<string, string>,
     });
 
     expect(result.exitCode).toBe(0);
@@ -70,7 +70,7 @@ STAGE2_RECEIVED: {{ _stdin }}
       ],
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: { ...process.env } as Record<string, string>,
     });
 
     const output = await new Response(proc.stdout).text();
@@ -107,7 +107,7 @@ STAGE2_RECEIVED: {{ _stdin }}
       ],
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: { ...process.env } as Record<string, string>,
     });
 
     const output = await new Response(proc.stdout).text();
@@ -131,7 +131,7 @@ Hello {{ _name }}! Input: {{ _stdin }}
     );
 
     const result = await spawnMdWithPipe(agent, "context", ["--_name", "World"], {
-      env: { ...process.env },
+      env: { ...process.env } as Record<string, string>,
     });
 
     expect(result.exitCode).toBe(0);
@@ -190,7 +190,7 @@ Received: {{ _stdin }}
       cmd: ["bash", "-c", `printf "line1\\nline2\\nline3" | bun run ${CLI_PATH} ${agent}`],
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: { ...process.env } as Record<string, string>,
     });
 
     const output = await new Response(proc.stdout).text();

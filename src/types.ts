@@ -141,7 +141,7 @@ export type FormInputs = Record<FrontmatterSystemKey, InputDefinition>;
 /**
  * Structured output behavior for post-command processing.
  */
-export interface StructuredOutputConfig {
+export interface StructuredOutputConfig extends Record<string, FrontmatterValue> {
   /** Expected output format for extraction */
   format?: "json" | "text" | "patch";
   /** Optional schema ref in `<path>#<ExportName>` format */
@@ -441,7 +441,7 @@ export interface ToolAdapter {
    * once just before spawn. Adapter vars never override an existing
    * process.env value or explicit run env (e.g. frontmatter _env).
    * Used by the pi adapter to point PI_CODING_AGENT_DIR at the bridged,
-   * hermetic agent dir.
+   * context-isolated agent dir.
    */
   prepareEnv?(): Record<string, string> | undefined;
 

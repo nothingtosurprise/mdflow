@@ -163,9 +163,11 @@ describe("form input types", () => {
         default: "dev",
       },
     };
-    expect(inputs._env!.type).toBe("select");
-    expect(inputs._env!.options).toEqual(["dev", "staging", "prod"]);
-    expect(inputs._env!.default).toBe("dev");
+    const input = inputs._env!;
+    expect(input.type).toBe("select");
+    if (input.type !== "select") throw new Error("expected select input");
+    expect(input.options).toEqual(["dev", "staging", "prod"]);
+    expect(input.default).toBe("dev");
   });
 
   it("supports number type with min/max", () => {
@@ -178,10 +180,12 @@ describe("form input types", () => {
         max: 100,
       },
     };
-    expect(inputs._count!.type).toBe("number");
-    expect(inputs._count!.min).toBe(1);
-    expect(inputs._count!.max).toBe(100);
-    expect(inputs._count!.default).toBe(5);
+    const input = inputs._count!;
+    expect(input.type).toBe("number");
+    if (input.type !== "number") throw new Error("expected number input");
+    expect(input.min).toBe(1);
+    expect(input.max).toBe(100);
+    expect(input.default).toBe(5);
   });
 
   it("supports confirm type", () => {

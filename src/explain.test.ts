@@ -71,6 +71,38 @@ This is a test prompt with some words`);
       expect(result.tokenUsage.limit).toBeGreaterThan(0);
       expect(result.tokenUsage.percentage).toBeGreaterThanOrEqual(0);
     });
+
+    it("uses the real engine ladder and preserves the full codex profile", async () => {
+      const projectDir = join(tempDir, "codex-project");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(
+        join(projectDir, ".mdflow.yaml"),
+        `engine: codex
+commands:
+  codex:
+    config:
+      - profile=project
+`
+      );
+      const agentPath = join(projectDir, "flow.md");
+      await writeFile(agentPath, `---
+model: gpt-5.5
+config: model_reasoning_effort="medium"
+---
+Inspect the project`);
+
+      const result = await analyzeAgent(agentPath, [], projectDir);
+
+      expect(result.command).toBe("codex");
+      expect(result.commandSource).toContain("Project config");
+      expect(result.finalArgs).toContain("--ignore-user-config");
+      expect(result.finalArgs).toContain("--ephemeral");
+      expect(result.finalFrontmatter.config).toEqual([
+        "profile=project",
+        "project_doc_max_bytes=0",
+        'model_reasoning_effort="medium"',
+      ]);
+    });
   });
 
   describe("formatExplainOutput", () => {

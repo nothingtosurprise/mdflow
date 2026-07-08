@@ -1,6 +1,8 @@
 # mdflow v3 — flows that learn
 
-Status: shipped — `mdflow@3.0.0` is on the npm `latest` dist-tag. Updated 2026-07-06.
+Status: historical v3 design record. The current package is v4; use
+[`docs/public-api.md`](public-api.md) and the root README for the current
+contract. Updated 2026-07-07.
 
 v3 absorbs an earlier single-file-agent prototype (now retired; its durable
 ideas live here under mdflow's own vocabulary). The pitch:
@@ -36,10 +38,11 @@ Antigravity, successor to the sunset gemini CLI — not flag-compatible with
 gemini; OAuth-only auth). The gemini adapter remains for Code Assist
 Standard/Enterprise orgs that keep the old CLI.
 
-pi runs **hermetic by default**: extension/skill/prompt-template/context-file
-discovery and session persistence are disabled, so the flow file is the
-entire behavior and an eval that passes on one machine means the same thing
-on another. Re-enable a layer per flow (`no-context-files: false`).
+pi disables extension/skill/prompt-template/context-file discovery and session
+persistence by default. This isolates ambient engine context; it does not
+sandbox the host filesystem, network, environment, credentials, or commands,
+so portability still depends on declared capabilities and fixtures. Re-enable
+a layer per flow (`no-context-files: false`).
 
 pi also gets a **subscription auth bridge**: its `openai-codex` provider
 shares the Codex CLI's OAuth client, so mdflow maintains a bridged agent dir
@@ -51,12 +54,12 @@ setup. Adapters can contribute spawn-time env vars via the new optional
 
 ### Isolation (`_isolated`) and system prompt (`_system-prompt`)
 
-pi's hermetic story is now the DEFAULT for every engine: flows run with
+Engine context isolation is the default where supported: flows run with
 ambient skills, MCP servers, memory/context files, plugins, and session
 persistence stripped, using adapter-verified flags layered between config
 defaults and frontmatter. Whatever a flow needs it references explicitly
-(`mcp-config:`, `plugin-dir:`, `add-dir:`, extension paths) — the flow file
-is the entire behavior. Opt out per flow (`_isolated: false`), per
+(`mcp-config:`, `plugin-dir:`, `add-dir:`, extension paths). This is not a
+host security sandbox. Opt out per flow (`_isolated: false`), per
 invocation (`--_isolated false`), or per machine
 (`commands.<engine>._isolated: false` in config); an isolated flow can also
 re-enable a single layer (`safe-mode: false`). claude gets `--safe-mode
@@ -78,7 +81,7 @@ dropping the prompt. `md explain` shows both resolutions for free.
 ### Evals (`md eval`)
 
 `md eval flows/jq.md` runs the colocated suite `flows/jq.eval.ts`
-(`export default` an `EvalCase[]`): each case gets a hermetic temp dir
+(`export default` an `EvalCase[]`): each case gets an isolated temp workspace
 (`setup` fixtures → real flow run → `check` on stdout AND the filesystem).
 Per-case cost is printed before anything is spent. Results land in the trust
 ledger (`~/.mdflow/eval-results.json`, `MDFLOW_EVAL_RESULTS` override); a
@@ -97,8 +100,9 @@ on its own suite (baseline) → asks a maintainer engine for a revised prompt
 BODY only (frontmatter is frozen; complaints are framed as untrusted
 evidence; the reply is accepted only from a fenced block with the closing
 fence on its own line) → gates the candidate on the full suite. Accepted
-means clean and no worse than the baseline: benefit is a printed measurement
-(`ancestor 0/1 → candidate 1/1`), not a hope. Failures revert byte-identical
+means clean and no worse than the baseline: regression is a printed measurement
+(`ancestor 0/1 → candidate 1/1`). A complaint is measured only when an eval
+represents it. Failures revert byte-identical
 and park the candidate at `<flow>.pending.md`. Gate runs write a scratch
 ledger, never the trust ledger; acceptance ends by pointing at `git diff`.
 

@@ -1451,17 +1451,17 @@ async function processCommandInline(
     const escapedMarkdownPath = escapeShellArg(markdownPath, isWin ? "win32" : "posix");
     actualCommand = `mdflow ${escapedMarkdownPath}${trailingArgs ? ` ${trailingArgs}` : ""}`;
     console.error(`[imports] Auto-running .md file with mdflow: ${actualCommand}`);
-  } else {
-    // Always log command execution unless dashboard is active (it shows progress)
-    if (!useDashboard) {
-      console.error(`[imports] Executing: ${processedCommand}`);
-    }
   }
 
-  // Improvement #3: Dry-run safety - skip execution if in dry-run mode
+  // Dry-run safety: report the command without claiming or attempting execution.
   if (importCtx?.dryRun) {
     console.error(`[imports] Dry-run: Skipping execution of '${actualCommand}'`);
     return `[Dry Run: Command "${actualCommand}" not executed]`;
+  }
+
+  // Always log command execution unless dashboard is active (it shows progress)
+  if (!useDashboard) {
+    console.error(`[imports] Executing: ${processedCommand}`);
   }
 
   // Use importCtx.env if provided, otherwise fall back to process.env
@@ -1638,11 +1638,12 @@ async function processExecutableCodeFence(
   const { shebang, language, code } = action;
   const fullScript = `${shebang}\n${code}`;
 
-  console.error(`[imports] Executing code fence (${language}): ${shebang}`);
-
   if (importCtx?.dryRun) {
+    console.error(`[imports] Dry-run: Skipping code fence (${language}): ${shebang}`);
     return "[Dry Run: Code fence not executed]";
   }
+
+  console.error(`[imports] Executing code fence (${language}): ${shebang}`);
 
   const ext = { ts: 'ts', js: 'js', py: 'py', sh: 'sh', bash: 'sh' }[language] ?? language;
   const tmpFile = join(tmpdir(), `mdflow-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);

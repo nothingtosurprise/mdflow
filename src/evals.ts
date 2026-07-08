@@ -4,7 +4,7 @@
  * Creed: "If a guardrail isn't covered by an eval, it's a wish." A flow's
  * prompt promises behavior; an eval suite is the only proof. Each case runs
  * the flow for real (one engine turn per case — cost is printed before
- * anything runs) inside a hermetic temp dir, then a check function asserts on
+ * anything runs) inside an isolated temp workspace, then a check function asserts on
  * stdout AND the resulting filesystem. Write checks on invariants (files,
  * numbers, names), not exact wording.
  *
@@ -27,7 +27,7 @@ export interface EvalContext {
   stdout: string;
   stderr: string;
   exitCode: number;
-  /** The hermetic sandbox dir the flow ran in. */
+  /** The isolated temporary workspace the flow ran in. */
   dir: string;
 }
 
@@ -38,13 +38,13 @@ export interface EvalCase {
   /** Piped stdin content. */
   stdin?: string;
   /**
-   * Where the flow runs. Default: a fresh hermetic temp dir per case.
+   * Where the flow runs. Default: a fresh isolated temp workspace per case.
    * Repo-bound flows (project rosters that inspect the live repository) set
    * this to a path relative to the flow file (e.g. ".." for the repo root);
    * no cleanup happens for an explicit cwd.
    */
   cwd?: string;
-  /** Prepare fixtures inside the sandbox before the flow runs. */
+  /** Prepare fixtures inside the temporary workspace before the flow runs. */
   setup?: (dir: string) => void | Promise<void>;
   /** Return null on pass, or a human-readable failure reason. */
   check: (ctx: EvalContext) => string | null | Promise<string | null>;

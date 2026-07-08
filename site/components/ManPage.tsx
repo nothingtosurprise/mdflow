@@ -124,9 +124,9 @@ export const ManPage: React.FC = () => {
               <p className="pl-6 border-l border-zinc-800 leading-relaxed text-zinc-400 max-w-2xl">
                 <span className="font-bold text-white">mdflow</span> executes markdown files as AI flows.
                 Frontmatter YAML becomes CLI flags; the body becomes the prompt; the engine resolves
-                via the ladder (default: <span className="italic text-orange-400">{facts.defaultEngine}</span>, hermetic, with your
+                via the ladder (default: <span className="italic text-orange-400">{facts.defaultEngine}</span>, ambient engine context disabled, with your
                 Codex login bridged automatically). Engines: {facts.enginesLabel}, or any CLI binary. Colocated
-                <span className="italic text-orange-400"> .eval.ts</span> suites prove a flow's behavior.
+                <span className="italic text-orange-400"> .eval.ts</span> suites guard a flow's declared behavior.
               </p>
             </div>
 
@@ -149,7 +149,7 @@ export const ManPage: React.FC = () => {
                   <p className="text-lg"><span className="text-orange-500 font-bold">md</span> research.md | <span className="text-orange-500 font-bold">md</span> plan.claude.md | <span className="text-orange-500 font-bold">md</span> code.codex.md</p>
                 </div>
                 <div className="bg-[#050505] p-6 rounded-lg border border-zinc-800 shadow-inner group hover:border-emerald-500/30 transition-colors">
-                  <p className="text-zinc-500 mb-2 text-xs uppercase tracking-wider"># Prove a flow's behavior (v3)</p>
+                  <p className="text-zinc-500 mb-2 text-xs uppercase tracking-wider"># Prove a flow's behavior</p>
                   <p className="text-lg"><span className="text-orange-500 font-bold">md</span> <span className="text-emerald-400">eval</span> review.md</p>
                 </div>
                 <div className="bg-[#050505] p-6 rounded-lg border border-zinc-800 shadow-inner group hover:border-amber-500/30 transition-colors">
@@ -167,7 +167,7 @@ export const ManPage: React.FC = () => {
               </h3>
               <p className="pl-6 border-l border-zinc-800 leading-relaxed text-zinc-400 max-w-2xl mb-6">
                 Preview what your template will render to before running the agent. Use <span className="font-mono text-white">md explain</span> to see the resolved config chain,
-                or <span className="text-emerald-400">--_dry-run</span> to see the fully expanded prompt with all variables and imports resolved.
+                or <span className="text-emerald-400">--_dry-run</span> to inspect the command plan and safe prompt preview. Inline commands and executable code fences are shown but not run.
               </p>
               <div className="pl-6 border-l border-zinc-800 space-y-6">
                 <div className="bg-[#050505] p-6 rounded-lg border border-zinc-800 shadow-inner group hover:border-emerald-500/30 transition-colors">

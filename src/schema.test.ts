@@ -60,18 +60,21 @@ describe("safeParseFrontmatter", () => {
   test("returns success with valid data", () => {
     const result = safeParseFrontmatter({ model: "opus" });
     expect(result.success).toBe(true);
-    expect(result.data?.model).toBe("opus");
+    if (!result.success) throw new Error(result.errors.join("; "));
+    expect(result.data.model).toBe("opus");
   });
 
   test("returns success with _inputs", () => {
     const result = safeParseFrontmatter({ _inputs: ["name", "value"] });
     expect(result.success).toBe(true);
-    expect(result.data?._inputs).toEqual(["name", "value"]);
+    if (!result.success) throw new Error(result.errors.join("; "));
+    expect(result.data._inputs).toEqual(["name", "value"]);
   });
 
   test("returns errors when _inputs is not an array", () => {
     const result = safeParseFrontmatter({ _inputs: "invalid" });
     expect(result.success).toBe(false);
+    if (result.success) throw new Error("expected invalid frontmatter");
     expect(result.errors).toBeDefined();
   });
 });
@@ -126,7 +129,8 @@ describe("safeParseConfig", () => {
       commands: { claude: { model: "opus" } }
     });
     expect(result.success).toBe(true);
-    expect(result.data?.commands?.claude?.model).toBe("opus");
+    if (!result.success) throw new Error(result.errors.join("; "));
+    expect(result.data.commands?.claude?.model).toBe("opus");
   });
 
   test("returns errors for invalid config", () => {
@@ -135,7 +139,8 @@ describe("safeParseConfig", () => {
       unknownField: true
     });
     expect(result.success).toBe(false);
+    if (result.success) throw new Error("expected invalid config");
     expect(result.errors).toBeDefined();
-    expect(result.errors!.length).toBeGreaterThan(0);
+    expect(result.errors.length).toBeGreaterThan(0);
   });
 });

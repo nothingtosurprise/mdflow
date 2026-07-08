@@ -159,14 +159,23 @@ describe("SystemEnvironment Interface", () => {
 
     describe("network.fetch", () => {
       it("fetches content from a URL", async () => {
-        // Use a reliable test endpoint
-        const response = await env.network.fetch(
-          "https://jsonplaceholder.typicode.com/posts/1"
-        );
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: () => Response.json({ id: 1 }),
+        });
 
-        expect(response.ok).toBe(true);
-        const data = (await response.json()) as { id: number };
-        expect(data.id).toBe(1);
+        try {
+          const response = await env.network.fetch(
+            `http://127.0.0.1:${server.port}/posts/1`
+          );
+
+          expect(response.ok).toBe(true);
+          const data = (await response.json()) as { id: number };
+          expect(data.id).toBe(1);
+        } finally {
+          server.stop(true);
+        }
       });
     });
   });

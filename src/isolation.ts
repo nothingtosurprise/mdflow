@@ -89,3 +89,39 @@ export function resolveIsolationDefaults(
   }
   return { defaults: adapter.getIsolationDefaults() };
 }
+
+/**
+ * Layer command defaults, isolation defaults, and flow frontmatter in their
+ * documented precedence order. Repeatable isolation flags are additive:
+ * lower-precedence config entries must survive so Codex can receive project
+ * defaults, its AGENTS.md kill-switch, and flow-specific `-c` overrides in
+ * one invocation. For scalar flags, the more specific layer still wins.
+ */
+export function applyIsolationDefaults(
+  frontmatter: AgentFrontmatter,
+  commandDefaults: CommandDefaults | undefined,
+  isolationDefaults: CommandDefaults
+): AgentFrontmatter {
+  const result = { ...(commandDefaults ?? {}) } as AgentFrontmatter;
+
+  const mergeLayer = (layer: AgentFrontmatter | CommandDefaults) => {
+    for (const [key, value] of Object.entries(layer)) {
+      if (Array.isArray(isolationDefaults[key])) {
+        const existing = result[key];
+        const base = existing === undefined
+          ? []
+          : Array.isArray(existing)
+            ? existing
+            : [existing];
+        const additions = Array.isArray(value) ? value : [value];
+        result[key] = [...base, ...additions];
+      } else {
+        result[key] = value;
+      }
+    }
+  };
+
+  mergeLayer(isolationDefaults);
+  mergeLayer(frontmatter);
+  return result;
+}
