@@ -509,7 +509,7 @@ export class CliRunner {
     const jsonMode = argv.includes("--json");
     const subcommand = parseCliArgs(argv).filePath;
     const nativeJsonSubcommand = subcommand !== undefined
-      && ["eval", "evolve", "feedback", "complain"].includes(subcommand);
+      && ["eval", "evolve", "feedback", "complain", "roster", "explain"].includes(subcommand);
     let logPath: string | null = null;
     // Structured lifecycle commands own their JSON schema. Letting the generic
     // flow wrapper capture them would double-encode their payload in `stdout`.
@@ -666,6 +666,10 @@ export class CliRunner {
       await runExplain(cliArgs.passthroughArgs);
       return { exitCode: 0 };
     }
+    if (subcommand === "roster") {
+      const { runRoster } = await import("./roster");
+      return { exitCode: await runRoster(cliArgs.passthroughArgs, this.cwd) };
+    }
     if (subcommand === "eval") {
       const { runEvalCli } = await import("./evals");
       return { exitCode: await runEvalCli(cliArgs.passthroughArgs) };
@@ -686,6 +690,15 @@ export class CliRunner {
 
     let filePath = cliArgs.filePath;
     let passthroughArgs = cliArgs.passthroughArgs;
+
+    // `md --version`: capability handshake for machine callers (Flow UX
+    // Protocol). Prints the bare version string and exits 0.
+    if (!filePath && (passthroughArgs.includes("--version") || passthroughArgs.includes("-v"))) {
+      const { mdflowVersion } = await import("./compat");
+      this.writeStdout(mdflowVersion());
+      return { exitCode: 0 };
+    }
+
     if (!filePath || subcommand === "help") {
       if (jsonModeRequested && !filePath && subcommand !== "help") {
         this.writeStderr("Usage: md <file.md> [flags for command]");
@@ -708,6 +721,16 @@ export class CliRunner {
         this.writeStderr("Run 'md help' for more info");
         throw new ConfigurationError("No agent file specified", 1);
       }
+    }
+
+    // NDJSON run event stream (Flow UX Protocol v1). stdout is protocol-pure;
+    // the flag is consumed here and never reaches the engine.
+    if (passthroughArgs.includes("--events")) {
+      return this.runAgentEvents(
+        filePath,
+        passthroughArgs.filter((arg) => arg !== "--events"),
+        setLogPath
+      );
     }
 
     return this.runAgent(filePath, passthroughArgs, setLogPath);
@@ -1436,6 +1459,243 @@ export class CliRunner {
 
     logger.info({ exitCode: runResult.exitCode, retryCount }, "Session ended");
     return { exitCode: runResult.exitCode, logPath };
+  }
+
+  /**
+   * `md <flow> --events` — NDJSON run event stream (Flow UX Protocol v1).
+   *
+   * stdout carries only JSON event lines; human rendering is suppressed and
+   * stray console.log output is rerouted to stderr. Engine output is carried
+   * inside `output.delta` events. `--events` implies non-interactive: a
+   * TTY-only interactive flow yields a `run.error` terminal event. SIGTERM
+   * is forwarded to the engine child and surfaces as `run.cancelled`.
+   */
+  private async runAgentEvents(
+    filePath: string,
+    passthroughArgs: string[],
+    setLogPath: (lp: string | null) => void
+  ): Promise<CliRunResult> {
+    const [{ createRunEventEmitter }, { flowIdForPath }, { mdflowVersion }] = await Promise.all([
+      import("./run-events"),
+      import("./roster"),
+      import("./compat"),
+    ]);
+
+    const emitter = createRunEventEmitter();
+    const startedAt = Date.now();
+
+    // stdout purity: anything that would render for a human goes to stderr.
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      console.error(...args);
+    };
+
+    const fail = (message: string, exitCode: number | null = null): CliRunResult => {
+      emitter.emit("run.error", {
+        exitCode,
+        message,
+        durationMs: Date.now() - startedAt,
+      });
+      return { exitCode: exitCode ?? 1 };
+    };
+
+    emitter.emit("protocol", { mdflowVersion: mdflowVersion() });
+
+    try {
+      const localFilePath = await this.resolveFilePath(filePath);
+      if (!(await this.env.fs.exists(localFilePath))) {
+        return fail(`File not found: ${localFilePath}`);
+      }
+
+      const pm = getProcessManager();
+      pm.initialize();
+
+      const fileDir = dirname(resolve(localFilePath));
+      await loadEnvFiles(fileDir);
+
+      const logger = initLogger(localFilePath);
+      const logPath = getCurrentLogPath();
+      setLogPath(logPath);
+      logger.info({ filePath: localFilePath, events: true }, "Event-stream session started");
+
+      const stdinContent = await this.readStdin();
+      const content = await this.env.fs.readText(localFilePath);
+      const { frontmatter: baseFrontmatter, body: rawBody } = parseFrontmatter(content);
+
+      const parsed = this.parseFlags(passthroughArgs);
+      // Event streams never prompt, never render, never show menus — reuse
+      // the non-interactive guarantees of --json mode inside processAgent.
+      parsed.jsonMode = true;
+
+      // --events implies non-interactive. A flow that requires a terminal
+      // cannot be hosted here; the caller should open a real terminal.
+      if (
+        hasInteractiveMarker(localFilePath) ||
+        parsed.interactiveFromCli ||
+        isInteractiveModeEnabled(baseFrontmatter as AgentFrontmatter)
+      ) {
+        return fail("interactive flow requires a terminal");
+      }
+
+      // Document rule: a file with no meaningful frontmatter and no explicit
+      // engine is a document, not a flow — there is nothing to run.
+      const fullConfig = await loadFullConfig(this.cwd);
+      const resolvedEngine = resolveEngine(localFilePath, baseFrontmatter as AgentFrontmatter, {
+        configEngine: fullConfig.engine,
+      });
+      const engineIsImplicit = !parsed.commandFromCli
+        && (resolvedEngine.source === "env" || resolvedEngine.source === "config" || resolvedEngine.source === "default");
+      if (engineIsImplicit && isCompatOnlyFrontmatter(baseFrontmatter as Record<string, unknown>)) {
+        return fail(`not a flow: ${localFilePath} is a document (no frontmatter or engine marker)`);
+      }
+
+      const { command, frontmatter, templateVars, finalBody, args, positionalMappings } =
+        await this.processAgent(localFilePath, baseFrontmatter, rawBody, stdinContent, parsed);
+
+      const flowId = flowIdForPath(resolve(localFilePath), { cwd: this.cwd });
+      const effectiveCwd = resolve(
+        parsed.cwdFromCli ?? (frontmatter._cwd as string | undefined) ?? this.cwd
+      );
+
+      let finalRunArgs = args;
+      if (frontmatter._subcommand) {
+        const subs = Array.isArray(frontmatter._subcommand)
+          ? frontmatter._subcommand.map(String)
+          : [String(frontmatter._subcommand)];
+        finalRunArgs = [...subs, ...args];
+      }
+
+      // Cancellation: replace the process-wide kill-and-exit handlers so a
+      // SIGTERM forwards to the engine child, emits `run.cancelled`, and
+      // exits cleanly with the terminal event already flushed (the emitter
+      // writes synchronously to fd 1).
+      const onCancelSignal = (signal: NodeJS.Signals): void => {
+        try {
+          pm.killAll();
+        } catch {
+          // Best-effort: the child may already be gone.
+        }
+        emitter.emit("run.cancelled", {
+          signal,
+          durationMs: Date.now() - startedAt,
+        });
+        try {
+          pm.restoreTerminal();
+        } catch {
+          // Best-effort cleanup.
+        }
+        process.exit(0);
+      };
+      process.removeAllListeners("SIGTERM");
+      process.removeAllListeners("SIGINT");
+      process.once("SIGTERM", () => onCancelSignal("SIGTERM"));
+      process.once("SIGINT", () => onCancelSignal("SIGINT"));
+
+      const emitDelta = (channel: "stdout" | "stderr", text: string): void => {
+        emitter.emit("output.delta", { channel, text });
+      };
+
+      const workflowSteps = frontmatter._steps;
+      if (workflowSteps !== undefined) {
+        const workflow = parseWorkflow(workflowSteps);
+        const workflowTemplateVars = Object.fromEntries(
+          Object.entries(templateVars).filter(([key]) => !key.startsWith("__"))
+        );
+
+        // Workflows spawn one engine child per step; `pid` reports the
+        // mdflow orchestrator that owns the process group.
+        emitter.emit("run.started", {
+          flowId,
+          path: resolve(localFilePath),
+          engine: command,
+          command,
+          args: finalRunArgs,
+          cwd: effectiveCwd,
+          pid: process.pid,
+        });
+
+        const workflowResult = await executeWorkflow({
+          workflow,
+          defaultTool: command,
+          args: finalRunArgs,
+          positionalMappings,
+          templateVars: workflowTemplateVars,
+          env: extractEnvVars(frontmatter),
+          captureOutput: "stream",
+          resume: parsed.resume,
+          cacheDir: join(effectiveCwd, ".mdflow", ".cache"),
+          onStepStart: (step) => {
+            emitter.emit("step.started", { stepId: step.id, needs: step.needs ?? [] });
+          },
+          onStepComplete: (result) => {
+            emitter.emit("step.completed", {
+              stepId: result.id,
+              exitCode: result.exitCode,
+              cached: result.fromCache,
+            });
+          },
+          runCommandFn: (ctx) =>
+            this.runCommandFn({ ...ctx, captureOutput: "stream", onOutput: emitDelta }),
+        });
+
+        const durationMs = Date.now() - startedAt;
+        if (workflowResult.exitCode === 0) {
+          emitter.emit("run.completed", { exitCode: 0, durationMs });
+        } else {
+          emitter.emit("run.error", {
+            exitCode: workflowResult.exitCode,
+            message: `workflow exited with code ${workflowResult.exitCode}`,
+            durationMs,
+          });
+        }
+        logger.info({ exitCode: workflowResult.exitCode, events: true }, "Event-stream workflow ended");
+        return { exitCode: workflowResult.exitCode, logPath };
+      }
+
+      const positionals = promptPositionals(finalBody, false);
+      const runResult = await this.runCommandFn({
+        command,
+        args: finalRunArgs,
+        positionals,
+        positionalMappings,
+        captureOutput: "stream",
+        captureStderr: true,
+        env: extractEnvVars(frontmatter),
+        onSpawn: (pid) => {
+          emitter.emit("run.started", {
+            flowId,
+            path: resolve(localFilePath),
+            engine: command,
+            command,
+            args: this.buildSpawnArgs(finalRunArgs, positionals, positionalMappings),
+            cwd: effectiveCwd,
+            pid,
+          });
+        },
+        onOutput: emitDelta,
+      });
+
+      const durationMs = Date.now() - startedAt;
+      if (runResult.exitCode === 0) {
+        emitter.emit("run.completed", { exitCode: 0, durationMs });
+      } else {
+        emitter.emit("run.error", {
+          exitCode: runResult.exitCode,
+          message: `engine exited with code ${runResult.exitCode}`,
+          durationMs,
+        });
+      }
+      logger.info({ exitCode: runResult.exitCode, events: true }, "Event-stream session ended");
+      return { exitCode: runResult.exitCode, logPath };
+    } catch (err) {
+      if (err instanceof EarlyExitRequest) {
+        return fail("run ended before the engine started", null);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      return fail(message, err instanceof MarkdownAgentError ? err.code : null);
+    } finally {
+      console.log = originalLog;
+    }
   }
 
   private getStructuredOutputConfig(frontmatter: AgentFrontmatter): StructuredOutputConfig | undefined {

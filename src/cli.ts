@@ -190,6 +190,7 @@ Commands:
   md install <url|gh:...@ref>   Install a flow into the registry (--global for user scope)
   md remove <name>              Remove an installed registry flow
   md list                       List installed registry flows
+  md roster --json              Machine-readable roster of project/global/registry flows
   md setup                      Configure shell (PATH, aliases)
   md logs                       Show agent log directory
   md help                       Show this help
@@ -261,6 +262,7 @@ md-specific flags (consumed, not passed to command):
   --_quiet          Skip context dashboard display before execution
   --_no-menu        Disable post-run action menu (for scripting/piping)
   --json            Emit a single JSON result object and disable interactive UI
+  --events          Stream NDJSON run events on stdout (machine-facing, non-interactive)
   --no-evolve       Disable post-run evolution handling for this run
 
 Without arguments:
