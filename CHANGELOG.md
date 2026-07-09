@@ -1,3 +1,10 @@
+# [4.2.0](https://github.com/johnlindquist/mdflow/compare/v4.1.0...v4.2.0) (2026-07-09)
+
+
+### Features
+
+* add flow workbench onboarding ([9eb3883](https://github.com/johnlindquist/mdflow/commit/9eb3883a4a11058a8d21103e587be1bea1d2f0eb))
+
 # [4.1.0](https://github.com/johnlindquist/mdflow/compare/v4.0.2...v4.1.0) (2026-07-08)
 
 
