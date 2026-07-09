@@ -1,0 +1,255 @@
+/**
+ * `md roster --json` — machine-facing flow enumeration (Flow UX Protocol v1).
+ *
+ * Prints a single JSON object describing every runnable flow visible from the
+ * invocation cwd: project flows (`<projectRoot>/flows/*.md`), global flows
+ * (`~/.mdflow/*.md`), and registry flows (`.mdflow/registry/` at project and
+ * user scope). Documents — markdown files with no frontmatter and no engine
+ * marker — are excluded, mirroring the runtime document-vs-flow decision in
+ * cli-runner. Always exits 0; unreadable directories become `warnings`.
+ */
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve, sep } from "node:path";
+import { parseFrontmatter } from "./parse";
+import { resolveEngine, hasInteractiveMarker } from "./command";
+import { loadFullConfig, isInteractiveModeEnabled } from "./config";
+import { isCompatOnlyFrontmatter } from "./compat";
+import { resolveProjectRoot } from "./project-root";
+import type { AgentFrontmatter, FormInputs, InputDefinition } from "./types";
+
+/** Flow UX Protocol version. Bump only with a fallback path on the app side. */
+export const FLOW_UX_PROTOCOL_VERSION = 1;
+
+export type FlowSource = "project" | "global" | "registry";
+
+export interface ProtocolInput {
+  name: string;
+  type: "text" | "select" | "number" | "confirm" | "password";
+  message: string | null;
+  options?: string[];
+  default: string | number | boolean | null;
+}
+
+export interface RosterFlow {
+  id: string;
+  path: string;
+  source: FlowSource;
+  name: string;
+  description: string | null;
+  engine: string;
+  engineSource: string;
+  inputs: ProtocolInput[];
+  isWorkflow: boolean;
+  interactive: boolean;
+  mtimeMs: number;
+}
+
+export interface Roster {
+  protocolVersion: number;
+  cwd: string;
+  projectRoot: string | null;
+  flows: RosterFlow[];
+  warnings: string[];
+}
+
+export interface RosterOptions {
+  cwd?: string;
+  homeDir?: string;
+}
+
+/**
+ * Map a flow's `_inputs` frontmatter (legacy string[] or typed object) to the
+ * protocol input shape shared by `md roster --json` and `md explain --json`.
+ */
+export function mapInputsToProtocol(
+  inputs: string[] | FormInputs | undefined | unknown
+): ProtocolInput[] {
+  if (!inputs) return [];
+
+  if (Array.isArray(inputs)) {
+    return inputs
+      .filter((name): name is string => typeof name === "string")
+      .map((name) => ({ name, type: "text" as const, message: null, default: null }));
+  }
+
+  if (typeof inputs !== "object") return [];
+
+  return Object.entries(inputs as FormInputs).map(([name, definition]) => {
+    const def = (definition ?? {}) as InputDefinition;
+    const type = def.type ?? "text";
+    const entry: ProtocolInput = {
+      name,
+      type,
+      message: def.description ?? null,
+      default: def.default !== undefined ? def.default : null,
+    };
+    if (type === "select") {
+      entry.options = Array.isArray((def as { options?: string[] }).options)
+        ? (def as { options: string[] }).options
+        : [];
+    }
+    return entry;
+  });
+}
+
+/**
+ * Classify a flow path into its roster source. Used by `md explain --json`
+ * to build the stable `<source>:<slug>` flow id for an arbitrary path.
+ */
+export function classifyFlowPath(
+  absolutePath: string,
+  opts: { projectRoot: string | null; homeDir?: string }
+): FlowSource {
+  const homeDir = opts.homeDir ?? homedir();
+  const within = (dir: string) => absolutePath.startsWith(dir + sep);
+
+  if (opts.projectRoot && within(join(opts.projectRoot, ".mdflow", "registry"))) return "registry";
+  if (within(join(homeDir, ".mdflow", "registry"))) return "registry";
+  if (within(join(homeDir, ".mdflow"))) return "global";
+  return "project";
+}
+
+/** Stable flow id for a path: `<source>:<filename stem>`. */
+export function flowIdForPath(
+  absolutePath: string,
+  opts: { cwd?: string; homeDir?: string } = {}
+): string {
+  const cwd = opts.cwd ?? process.cwd();
+  let projectRoot: string | null = null;
+  try {
+    projectRoot = resolveProjectRoot(cwd).projectRoot;
+  } catch {
+    projectRoot = null;
+  }
+  const source = classifyFlowPath(absolutePath, { projectRoot, homeDir: opts.homeDir });
+  const stem = absolutePath.split(sep).pop()!.replace(/\.md$/i, "");
+  return `${source}:${stem}`;
+}
+
+/** True when the engine resolution rung is implicit (env/config/default). */
+function isImplicitEngineSource(source: string): boolean {
+  return source === "env" || source === "config" || source === "default";
+}
+
+/** Collect the roster. Never throws for missing/unreadable directories. */
+export async function collectRoster(options: RosterOptions = {}): Promise<Roster> {
+  const cwd = options.cwd ?? process.cwd();
+  const homeDir = options.homeDir ?? homedir();
+  const warnings: string[] = [];
+
+  let projectRoot: string | null = null;
+  try {
+    projectRoot = resolveProjectRoot(cwd).projectRoot;
+  } catch (err) {
+    warnings.push(`Project root resolution failed: ${(err as Error).message}`);
+  }
+
+  let configEngine: string | undefined;
+  try {
+    configEngine = (await loadFullConfig(cwd)).engine;
+  } catch (err) {
+    warnings.push(`Config load failed: ${(err as Error).message}`);
+  }
+
+  const flows: RosterFlow[] = [];
+  const seenIds = new Set<string>();
+
+  const scanDir = (dir: string, source: FlowSource): void => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        warnings.push(`Cannot read ${dir}: ${(err as Error).message}`);
+      }
+      return;
+    }
+
+    const fileNames = entries
+      .filter((name) => name.toLowerCase().endsWith(".md"))
+      // flows/README.md documents the roster; it is not itself executable.
+      .filter((name) => name.toLowerCase() !== "readme.md")
+      .sort((a, b) => a.localeCompare(b));
+
+    for (const fileName of fileNames) {
+      const path = resolve(join(dir, fileName));
+
+      let mtimeMs: number;
+      try {
+        const stats = statSync(path);
+        if (!stats.isFile()) continue;
+        mtimeMs = Math.floor(stats.mtimeMs);
+      } catch {
+        continue;
+      }
+
+      let frontmatter: AgentFrontmatter;
+      try {
+        frontmatter = parseFrontmatter(readFileSync(path, "utf-8")).frontmatter;
+      } catch (err) {
+        warnings.push(`Skipping ${path}: ${(err as Error).message}`);
+        continue;
+      }
+
+      const resolved = resolveEngine(path, frontmatter, { configEngine });
+
+      // Document rule (mirrors cli-runner): a file with no meaningful
+      // frontmatter whose engine only resolved implicitly is not a flow.
+      if (
+        isImplicitEngineSource(resolved.source) &&
+        isCompatOnlyFrontmatter(frontmatter as Record<string, unknown>)
+      ) {
+        continue;
+      }
+
+      const name = fileName.replace(/\.md$/i, "");
+      const id = `${source}:${name}`;
+      if (seenIds.has(id)) {
+        warnings.push(`Duplicate flow id ${id}: ${path} is shadowed`);
+        continue;
+      }
+      seenIds.add(id);
+
+      flows.push({
+        id,
+        path,
+        source,
+        name,
+        description:
+          typeof frontmatter.description === "string" ? frontmatter.description : null,
+        engine: resolved.engine,
+        engineSource: resolved.source,
+        inputs: mapInputsToProtocol(frontmatter._inputs),
+        isWorkflow: frontmatter._steps !== undefined,
+        interactive:
+          hasInteractiveMarker(path) || isInteractiveModeEnabled(frontmatter),
+        mtimeMs,
+      });
+    }
+  };
+
+  // Ordering contract: project flows first (alphabetical), then global,
+  // then registry (project-scope registry before user-scope registry).
+  if (projectRoot) scanDir(join(projectRoot, "flows"), "project");
+  scanDir(join(homeDir, ".mdflow"), "global");
+  if (projectRoot) scanDir(join(projectRoot, ".mdflow", "registry"), "registry");
+  scanDir(join(homeDir, ".mdflow", "registry"), "registry");
+
+  return {
+    protocolVersion: FLOW_UX_PROTOCOL_VERSION,
+    cwd,
+    projectRoot,
+    flows,
+    warnings,
+  };
+}
+
+/** Run the roster subcommand. Always exits 0 (warnings carry soft failures). */
+export async function runRoster(_args: string[], cwd = process.cwd()): Promise<number> {
+  const roster = await collectRoster({ cwd });
+  process.stdout.write(`${JSON.stringify(roster)}\n`);
+  return 0;
+}
