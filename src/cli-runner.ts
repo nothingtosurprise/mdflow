@@ -1591,8 +1591,18 @@ export class CliRunner {
       process.once("SIGTERM", () => onCancelSignal("SIGTERM"));
       process.once("SIGINT", () => onCancelSignal("SIGINT"));
 
+      // Chunk delta text: a single writeSync of a line larger than the pipe
+      // buffer (~64KiB) can partially write and corrupt the NDJSON stream
+      // (observed on Bun/macOS). 8KiB raw text stays far under the buffer
+      // even at worst-case JSON escaping (6 bytes per char).
+      const DELTA_CHUNK_CHARS = 8192;
       const emitDelta = (channel: "stdout" | "stderr", text: string): void => {
-        emitter.emit("output.delta", { channel, text });
+        for (let start = 0; start < text.length; start += DELTA_CHUNK_CHARS) {
+          emitter.emit("output.delta", {
+            channel,
+            text: text.slice(start, start + DELTA_CHUNK_CHARS),
+          });
+        }
       };
 
       const workflowSteps = frontmatter._steps;

@@ -44,9 +44,37 @@ export interface RunEventEmitter {
  * "exactly one terminal event, and it is last" contract can never be broken
  * by racing signal handlers.
  */
+/** ~1ms pause between EAGAIN retries without burning a core. */
+function sleepBriefly(): void {
+  const bunSleep = (globalThis as { Bun?: { sleepSync?: (ms: number) => void } }).Bun?.sleepSync;
+  if (bunSleep) {
+    bunSleep(1);
+    return;
+  }
+  const sab = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(sab, 0, 0, 1);
+}
+
 export function createRunEventEmitter(
   write: (line: string) => void = (line) => {
-    writeSync(1, line);
+    // fd 1 is non-blocking when stdout is a pipe (observed under Bun on
+    // macOS): writeSync can partially write and then throw EAGAIN when the
+    // consumer lags. Either failure mid-line corrupts the NDJSON stream, so
+    // loop with explicit offsets and retry EAGAIN until the full line is on
+    // the wire.
+    const buffer = Buffer.from(line, "utf8");
+    let offset = 0;
+    while (offset < buffer.length) {
+      try {
+        offset += writeSync(1, buffer, offset, buffer.length - offset);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === "EAGAIN") {
+          sleepBriefly();
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 ): RunEventEmitter {
   let seq = 0;

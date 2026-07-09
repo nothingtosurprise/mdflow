@@ -133,6 +133,32 @@ _steps:
     await cleanup();
   });
 
+  it("survives a giant single-line output: every NDJSON line stays valid past the 64KiB pipe buffer", async () => {
+    // Regression: writeSync(1, line) ignored the returned byte count, so an
+    // event line larger than the pipe buffer was cut mid-JSON and the
+    // consumer lost the entire delta.
+    const giant = join(binDir, "giant");
+    await writeFile(
+      giant,
+      `#!/bin/sh\nawk 'BEGIN { s=\"\"; while (length(s) < 131072) s = s \"GIANTCHUNK\"; print s \"GIANT_END_MARKER\" }'\nexit 0\n`
+    );
+    await chmod(giant, 0o755);
+    await writeFile(join(projectDir, "flows", "huge.giant.md"), "emit big");
+
+    const { events, stdout, exitCode } = await runEvents(["huge.giant"]);
+    expect(exitCode).toBe(0);
+    for (const line of stdout.split("\n").filter(Boolean)) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+    assertEnvelope(events);
+    const text = events
+      .filter((event) => event.event === "output.delta" && event.channel === "stdout")
+      .map((event) => event.text)
+      .join("");
+    expect(text).toContain("GIANT_END_MARKER");
+    expect(text.length).toBeGreaterThan(131072);
+  });
+
   it("keeps stdout protocol-pure: every line is JSON, engine text only inside output.delta", async () => {
     const { events, stdout, exitCode } = await runEvents(["basic.fkeng"]);
 
