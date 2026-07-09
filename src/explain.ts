@@ -11,8 +11,16 @@
  */
 
 import { existsSync } from "fs";
+import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "path";
 import { parseFrontmatter } from "./parse";
+import { mdflowVersion } from "./compat";
+import {
+  FLOW_UX_PROTOCOL_VERSION,
+  flowIdForPath,
+  mapInputsToProtocol,
+  type ProtocolInput,
+} from "./roster";
 import {
   resolveEngine, buildArgs, extractPositionalMappings,
   extractEnvVars, hasInteractiveMarker,
@@ -30,6 +38,7 @@ import {
 import { extractSystemPromptSpec, applySystemPromptToFrontmatter } from "./system-prompt";
 import { expandContentImports, hasContentImports } from "./imports";
 import { substituteTemplateVars, extractTemplateVars } from "./template";
+import { isFormInputs, getFormInputDefaults } from "./form-inputs";
 import { isDomainTrusted, extractDomain, getKnownHostsPath } from "./trust";
 import { isRemoteUrl, fetchRemote, cleanupRemote } from "./remote";
 import { getTokenUsage } from "./tokenizer";
@@ -50,6 +59,8 @@ export interface ExplainResult {
   finalArgs: string[];
   positionalMappings: Map<number, string>;
   finalPrompt: string;
+  /** The complete resolved prompt (never truncated); used by --json mode. */
+  finalPromptFull: string;
   promptTruncated: boolean;
   tokenUsage: { tokens: number; limit: number; percentage: number; exceeds: boolean };
   trustStatus?: { domain: string; trusted: boolean; knownHostsPath: string };
@@ -198,12 +209,38 @@ export async function analyzeAgent(
 
   const templateVars: Record<string, string> = {};
   const internalKeys = new Set([
-    "_interactive", "_i", "_cwd", "_subcommand",
+    "_interactive", "_i", "_cwd", "_subcommand", "_steps", "_output", "_inputs",
     "_isolated", "_system-prompt", "_append-system-prompt",
   ]);
   for (const key of Object.keys(frontmatter).filter((k) => k.startsWith("_") && !internalKeys.has(k))) {
     const value = frontmatter[key];
     if (value != null && value !== "") templateVars[key] = String(value);
+  }
+
+  // Mirror the run path: typed `_inputs` defaults fill template vars, and
+  // `--_name value` / `--_name=value` CLI overrides win over defaults.
+  if (isFormInputs(frontmatter._inputs)) {
+    const defaults = getFormInputDefaults(frontmatter._inputs);
+    for (const [key, value] of Object.entries(defaults)) {
+      if (!(key in templateVars)) templateVars[key] = value;
+    }
+  }
+  for (let i = 0; i < passthroughArgs.length; i++) {
+    const arg = passthroughArgs[i];
+    if (!arg || !arg.startsWith("--_")) continue;
+    if (arg.includes("=")) {
+      const eqIndex = arg.indexOf("=");
+      const key = arg.slice(2, eqIndex);
+      if (!internalKeys.has(key)) templateVars[key] = arg.slice(eqIndex + 1);
+      continue;
+    }
+    const key = arg.slice(2);
+    if (internalKeys.has(key)) continue;
+    const next = passthroughArgs[i + 1];
+    if (next !== undefined && !next.startsWith("-")) {
+      templateVars[key] = next;
+      i++;
+    }
   }
 
   let expandedBody = rawBody;
@@ -244,7 +281,7 @@ export async function analyzeAgent(
   return {
     agentPath: filePath, isRemote, command, commandSource, finalFrontmatter: frontmatter,
     builtinDefaults, globalDefaults, projectDefaults, originalFrontmatter: originalFrontmatter as AgentFrontmatter,
-    finalArgs, positionalMappings, finalPrompt, promptTruncated, tokenUsage, trustStatus, envKeys,
+    finalArgs, positionalMappings, finalPrompt, finalPromptFull, promptTruncated, tokenUsage, trustStatus, envKeys,
     interactiveMode: interactiveFromFilename || interactiveFromCli || interactiveFromFrontmatter,
     interactiveModeSource,
     configPaths: { global: globalConfigPath, globalExists: existsSync(globalConfigPath), project: projectConfigPath, projectExists: projectConfigPath !== null },
@@ -375,19 +412,129 @@ export function formatExplainOutput(result: ExplainResult): string {
   return lines.join("\n");
 }
 
+/**
+ * Machine-facing serialization of an explain result (Flow UX Protocol v1).
+ * Free: builds on analyzeAgent, which never invokes an engine.
+ */
+export interface ExplainJson {
+  protocolVersion: number;
+  flowId: string;
+  path: string;
+  engine: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  prompt: string;
+  promptIncluded: boolean;
+  promptTokensEstimate: number;
+  inputs: ProtocolInput[];
+  warnings: string[];
+  configFingerprint: string;
+}
+
+/**
+ * Build the `md explain <flow> --json` payload. FREE — no engine call.
+ *
+ * `configFingerprint` is a sha256 over the resolved (merged) config, the raw
+ * flow file content, and the running mdflow version, so the app can cache
+ * explanations keyed on `(path, mtimeMs, cwd, mdflowVersion, configFingerprint)`.
+ */
+export async function buildExplainJson(
+  filePath: string,
+  passthroughArgs: string[] = [],
+  cwd: string = process.cwd()
+): Promise<ExplainJson> {
+  const result = await analyzeAgent(filePath, passthroughArgs, cwd);
+
+  // Effective run cwd: --_cwd flag > frontmatter _cwd > invocation cwd.
+  let cwdFromCli: string | undefined;
+  const cwdIdx = passthroughArgs.indexOf("--_cwd");
+  if (cwdIdx !== -1 && cwdIdx + 1 < passthroughArgs.length) {
+    cwdFromCli = passthroughArgs[cwdIdx + 1];
+  }
+  const effectiveCwd = resolve(
+    cwdFromCli ?? (result.finalFrontmatter._cwd as string | undefined) ?? cwd
+  );
+
+  // Full argv exactly as a run would build it: subcommand tokens, flag args,
+  // then the prompt positional (respecting $N positional mappings). An
+  // interactive flow with a blank body submits no positional at all.
+  const args = [...result.finalArgs];
+  if (result.finalFrontmatter._subcommand) {
+    const sub = result.finalFrontmatter._subcommand;
+    const subs = Array.isArray(sub) ? sub.map(String) : [String(sub)];
+    args.unshift(...subs);
+  }
+  const prompt = result.finalPromptFull;
+  const promptIncluded = !(result.interactiveMode && !prompt.trim());
+  if (promptIncluded) {
+    const mapping = result.positionalMappings.get(1);
+    if (mapping) {
+      args.push(mapping.length === 1 ? `-${mapping}` : `--${mapping}`, prompt);
+    } else {
+      args.push(prompt);
+    }
+  }
+
+  const warnings: string[] = [];
+  if (result.isolation.warning) warnings.push(result.isolation.warning);
+  if (result.systemPrompt?.error) warnings.push(result.systemPrompt.error);
+
+  // Fingerprint: resolved config + flow content + mdflow version.
+  const fullConfig = await loadFullConfig(cwd);
+  let flowContent = "";
+  try {
+    flowContent = await Bun.file(result.isRemote ? filePath : resolve(filePath)).text();
+  } catch {
+    // Remote flows were cleaned up after analysis; hash without content.
+  }
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(fullConfig))
+    .update("\0")
+    .update(flowContent)
+    .update("\0")
+    .update(mdflowVersion())
+    .digest("hex");
+
+  return {
+    protocolVersion: FLOW_UX_PROTOCOL_VERSION,
+    flowId: flowIdForPath(resolve(filePath), { cwd }),
+    path: result.isRemote ? filePath : resolve(filePath),
+    engine: result.command,
+    command: result.command,
+    args,
+    cwd: effectiveCwd,
+    prompt,
+    promptIncluded,
+    promptTokensEstimate: Math.ceil(prompt.length / 4),
+    inputs: mapInputsToProtocol(result.originalFrontmatter._inputs),
+    warnings,
+    configFingerprint: `sha256:${fingerprint}`,
+  };
+}
+
 /** Run the explain command */
 export async function runExplain(args: string[]): Promise<void> {
-  if (args.length === 0) {
-    console.error("Usage: md explain <agent.md> [flags]");
+  const jsonMode = args.includes("--json");
+  const cleanArgs = args.filter((arg) => arg !== "--json");
+
+  if (cleanArgs.length === 0) {
+    console.error("Usage: md explain <agent.md> [flags] [--json]");
     console.error("\nShows resolved configuration for an agent without executing it.");
     console.error("\nExamples:");
     console.error("  md explain task.claude.md");
     console.error("  md explain task.claude.md --model opus");
+    console.error("  md explain flows/review.md --json");
     process.exit(1);
   }
 
   try {
-    const result = await analyzeAgent(args[0]!, args.slice(1));
+    if (jsonMode) {
+      const payload = await buildExplainJson(cleanArgs[0]!, cleanArgs.slice(1));
+      process.stdout.write(`${JSON.stringify(payload)}\n`);
+      return;
+    }
+    const result = await analyzeAgent(cleanArgs[0]!, cleanArgs.slice(1));
     console.log(formatExplainOutput(result));
   } catch (err) {
     console.error(`Error analyzing agent: ${(err as Error).message}`);
