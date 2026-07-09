@@ -4,29 +4,58 @@ import {
     currentRun,
     demoReducer,
     initialDemoState,
-    storyFor,
     type DemoState,
     type StoryId,
 } from './model';
-import { stripAnsi, terminalScreen } from './screens';
+import { screenHasFocusTarget, screenLinesFor, stripAnsi, terminalScreen } from './screens';
+import { compileStory, storyFor } from './stories';
 
 function plainScreen(state: DemoState, cols = 92): string {
     return stripAnsi(terminalScreen(state, allDemoFlows(state), cols, 26, false));
 }
 
+function withPresentation(
+    state: DemoState,
+    presentation: Partial<DemoState['presentation']>,
+): DemoState {
+    return {
+        ...state,
+        presentation: { ...state.presentation, ...presentation },
+    };
+}
+
+function visibleLines(rendered: string): string[] {
+    return stripAnsi(rendered)
+        .replace(/\u001b\[[?0-9;]*[A-Za-z]/g, '')
+        .split(/\r?\n/);
+}
+
 function runStory(storyId: StoryId): DemoState {
-    let state = initialDemoState(storyId, true);
-    for (const _cue of storyFor(storyId).cues) {
-        state = demoReducer(state, { type: 'TIMELINE_CUE', ...currentRun(state) });
+    let state = initialDemoState(storyId);
+    if (storyId === 'project-setup') {
+        state = demoReducer(state, { type: 'SET_PROJECT_SELECTION', selected: [1, 3] });
+        state = demoReducer(state, { type: 'SET_PROJECT_STAGE', stage: 'approval' });
+        return { ...state, gate: 'project-go' };
     }
-    return state;
+    if (storyId === 'quick-create') {
+        state = demoReducer(state, { type: 'SET_CREATE_INTENT', intent: 'Draft release notes from this branch' });
+        state = demoReducer(state, { type: 'SET_QUICK_STAGE', stage: 'enter-boundary' });
+        return { ...state, gate: 'quick-create-enter' };
+    }
+    if (storyId === 'personal-flows') {
+        state = demoReducer(state, { type: 'SET_PERSONAL_INTENT', intent: 'Turn my notes into a daily plan' });
+        state = demoReducer(state, { type: 'SET_PERSONAL_STAGE', stage: 'enter-boundary' });
+        return { ...state, gate: 'personal-create-enter' };
+    }
+    state = demoReducer(state, { type: 'SET_EVOLVE_STAGE', stage: 'proposal' });
+    state = demoReducer(state, { type: 'SET_EVOLVE_STAGE', stage: 'decision' });
+    return { ...state, gate: 'evolve-apply' };
 }
 
 describe('project setup story', () => {
     it('shows real launch consent and persistent browser-fixture honesty', () => {
         let state = initialDemoState('project-setup', true);
-        state = demoReducer(state, { type: 'TIMELINE_CUE', ...currentRun(state) });
-        state = demoReducer(state, { type: 'TIMELINE_CUE', ...currentRun(state) });
+        state = demoReducer(state, { type: 'SET_PROJECT_STAGE', stage: 'consent' });
         const screen = plainScreen(state);
         expect(screen).toContain('Launch codex?');
         expect(screen).toContain('[ENGINE]');
@@ -132,6 +161,136 @@ describe('personal flow story', () => {
     });
 });
 
+describe('semantic focus and human typing presentation', () => {
+    it('keeps every internally rendered row as an identified screen-line object', () => {
+        const lines = screenLinesFor(initialDemoState('project-setup'));
+        expect(lines.length).toBeGreaterThan(0);
+        expect(lines.every((line) => typeof line.content === 'string')).toBe(true);
+        expect(lines.some((line) => line.id === 'shell-command')).toBe(true);
+    });
+
+    it('reserves a two-column gutter and paints exactly one orange focus rail', () => {
+        let state = initialDemoState('project-setup');
+        state = demoReducer(state, { type: 'SET_PROJECT_STAGE', stage: 'suggestions' });
+        state = withPresentation(state, { focus: 'suggestion-2' });
+
+        const rendered = terminalScreen(state, allDemoFlows(state), 92, 26, false);
+        const lines = visibleLines(rendered);
+        expect(lines.filter((line) => line.startsWith('▎ '))).toHaveLength(1);
+        expect(lines.find((line) => line.includes('2. release-check'))).toStartWith('▎ ');
+        expect(lines.every((line) => line.startsWith('  ') || line.startsWith('▎ '))).toBe(true);
+        expect(rendered.match(/\u001b\[38;2;251;146;60m▎ /g)).toHaveLength(1);
+    });
+
+    it('leaves the stable blank gutter when no semantic target has focus', () => {
+        const state = withPresentation(initialDemoState('quick-create'), { focus: null });
+        const lines = visibleLines(terminalScreen(state, allDemoFlows(state), 92, 26, false));
+        expect(lines.every((line) => line.startsWith('  '))).toBe(true);
+        expect(lines.some((line) => line.startsWith('▎ '))).toBe(false);
+    });
+
+    it('resolves every focus target against its applicable screen', () => {
+        let project = initialDemoState('project-setup');
+        expect(screenHasFocusTarget(project, 'shell-command')).toBe(true);
+        project = demoReducer(project, { type: 'SET_PROJECT_STAGE', stage: 'consent' });
+        expect(screenHasFocusTarget(project, 'consent-agent')).toBe(true);
+        expect(screenHasFocusTarget(project, 'consent-launch')).toBe(true);
+        project = demoReducer(project, { type: 'SET_PROJECT_STAGE', stage: 'inspection' });
+        expect(screenHasFocusTarget(project, 'shell-command')).toBe(true);
+        project = demoReducer(project, { type: 'SET_PROJECT_STAGE', stage: 'suggestions' });
+        for (const target of ['suggestion-1', 'suggestion-2', 'suggestion-3', 'suggestion-4'] as const) {
+            expect(screenHasFocusTarget(project, target)).toBe(true);
+        }
+        project = demoReducer(project, { type: 'SET_PROJECT_STAGE', stage: 'selection' });
+        expect(screenHasFocusTarget(project, 'selection-reply')).toBe(true);
+        project = demoReducer(project, { type: 'SET_PROJECT_STAGE', stage: 'approval' });
+        expect(screenHasFocusTarget(project, 'write-gate')).toBe(true);
+
+        let quick = initialDemoState('quick-create');
+        quick = demoReducer(quick, { type: 'SET_QUICK_STAGE', stage: 'question' });
+        expect(screenHasFocusTarget(quick, 'intent-input')).toBe(true);
+
+        let evolve = initialDemoState('evolve-safely');
+        expect(screenHasFocusTarget(evolve, 'sample-result')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'SET_EVOLVE_STAGE', stage: 'feedback' });
+        expect(screenHasFocusTarget(evolve, 'feedback-input')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'SET_EVOLVE_STAGE', stage: 'feedback-saved' });
+        expect(screenHasFocusTarget(evolve, 'feedback-input')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'SET_EVOLVE_STAGE', stage: 'plan' });
+        expect(screenHasFocusTarget(evolve, 'plan')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'SET_EVOLVE_STAGE', stage: 'proposal' });
+        expect(screenHasFocusTarget(evolve, 'proposal')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'SET_EVOLVE_STAGE', stage: 'diff' });
+        expect(screenHasFocusTarget(evolve, 'diff')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'SET_EVOLVE_STAGE', stage: 'decision' });
+        expect(screenHasFocusTarget(evolve, 'decision')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'REQUEST_APPLY' });
+        expect(screenHasFocusTarget(evolve, 'confirmation')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'APPLY_FIXTURE' });
+        expect(screenHasFocusTarget(evolve, 'confirmation')).toBe(true);
+        evolve = demoReducer(evolve, { type: 'REQUEST_ROLLBACK' });
+        evolve = demoReducer(evolve, { type: 'ROLLBACK_FIXTURE' });
+        expect(screenHasFocusTarget(evolve, 'confirmation')).toBe(true);
+
+        let personal = initialDemoState('personal-flows');
+        personal = demoReducer(personal, { type: 'SET_PERSONAL_STAGE', stage: 'cross-project' });
+        expect(screenHasFocusTarget(personal, 'personal-resolution')).toBe(true);
+    });
+
+    it('resolves every focus phase in all four compiled stories', () => {
+        for (const storyId of ['project-setup', 'quick-create', 'evolve-safely', 'personal-flows'] as const) {
+            let state = initialDemoState(storyId);
+            for (const phase of compileStory(storyFor(storyId))) {
+                if (phase.action) state = demoReducer(state, phase.action);
+                state = withPresentation(state, {
+                    focus: phase.focus,
+                    typingField: phase.typingField,
+                    typingText: phase.typingText,
+                    typingActive: phase.typingActive,
+                });
+                if (phase.focus !== null) {
+                    expect(screenHasFocusTarget(state, phase.focus)).toBe(true);
+                }
+            }
+        }
+    });
+
+    it('renders presentation-only typing with a painted caret without mutating domain text', () => {
+        let state = initialDemoState('quick-create');
+        state = demoReducer(state, { type: 'SET_QUICK_STAGE', stage: 'question' });
+        state = {
+            ...state,
+            createIntent: 'domain text stays intact',
+            presentation: {
+                focus: 'intent-input',
+                typingField: 'createIntent',
+                typingText: 'Draft release no',
+                typingActive: true,
+            },
+        };
+
+        const typing = plainScreen(state);
+        expect(typing).toContain('Draft release no▌');
+        expect(typing).not.toContain('domain text stays intact');
+        expect(state.createIntent).toBe('domain text stays intact');
+
+        const complete = withPresentation(state, { typingActive: false, typingField: null, typingText: '' });
+        expect(plainScreen(complete)).toContain('domain text stays intact');
+        expect(plainScreen(complete)).not.toContain('▌');
+    });
+
+    it('shows a caret for manually edited focused text and removes it for reduced motion', () => {
+        let state = initialDemoState('evolve-safely');
+        state = demoReducer(state, { type: 'SET_FEEDBACK', feedback: 'Observed race' });
+        state = withPresentation(state, { focus: 'feedback-input' });
+        expect(plainScreen(state)).toContain('Observed race▌');
+
+        const reduced = stripAnsi(terminalScreen(state, allDemoFlows(state), 92, 26, true));
+        expect(reduced).not.toContain('▌');
+        expect(reduced).toContain('▎ ');
+    });
+});
+
 describe('terminal rendering safety', () => {
     it('uses green FREE, yellow ENGINE, and blue LOCAL WRITE labels', () => {
         let free = initialDemoState('evolve-safely');
@@ -156,9 +315,12 @@ describe('terminal rendering safety', () => {
         expect(Math.max(...visibleLines.map((line) => Array.from(line).length))).toBeLessThanOrEqual(38);
     });
 
-    it('hides the terminal cursor when reduced motion is requested', () => {
+    it('always hides the actual terminal cursor, including while text accepts input', () => {
         const state = demoReducer(initialDemoState('quick-create'), { type: 'SET_QUICK_STAGE', stage: 'question' });
+        const animated = terminalScreen(state, allDemoFlows(state), 92, 26, false);
         const rendered = terminalScreen(state, allDemoFlows(state), 92, 26, true);
+        expect(animated).toContain('\u001b[?25l');
+        expect(animated).not.toContain('\u001b[?25h');
         expect(rendered).toContain('\u001b[?25l');
         expect(rendered).not.toContain('\u001b[?25h');
     });

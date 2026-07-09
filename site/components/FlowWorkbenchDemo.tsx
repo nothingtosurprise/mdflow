@@ -20,13 +20,18 @@ import {
     Pause,
     Play,
     RotateCcw,
+    StepBack,
     Sparkles,
     StepForward,
 } from 'lucide-react';
 import {
     allDemoFlows,
+    canNextBeat,
+    canPreviousBeat,
+    canResetGateResult,
     canContinueSample,
-    currentCue,
+    currentBeat,
+    currentPhase,
     currentRun,
     demoReducer,
     initialDemoState,
@@ -69,6 +74,8 @@ export const FlowWorkbenchDemo: React.FC = () => {
     const lastScreenRef = useRef('');
     const renderFrameRef = useRef<number | null>(null);
     const autoplayStartedRef = useRef(false);
+    const isComposingRef = useRef(false);
+    const terminalFocusedRef = useRef(false);
     const [state, dispatch] = useReducer(
         demoReducer,
         undefined,
@@ -80,14 +87,19 @@ export const FlowWorkbenchDemo: React.FC = () => {
     const [isInView, setIsInView] = useState(false);
     const [hoverPaused, setHoverPaused] = useState(false);
     const [focusPaused, setFocusPaused] = useState(false);
+    const [terminalFocused, setTerminalFocused] = useState(false);
     const [pageHidden, setPageHidden] = useState(
         () => typeof document !== 'undefined' && document.hidden,
     );
     const reducedMotion = usePrefersReducedMotion();
 
     const story = storyFor(state.storyId);
-    const cue = currentCue(state);
-    const run = currentRun(state);
+    const beat = currentBeat(state);
+    const phase = currentPhase(state);
+    const run = useMemo(
+        () => currentRun(state),
+        [state.playback.cueIndex, state.playback.phaseIndex, state.playback.runToken, state.storyId],
+    );
     const flows = useMemo(() => allDemoFlows(state), [state]);
 
     useEffect(() => {
@@ -129,20 +141,19 @@ export const FlowWorkbenchDemo: React.FC = () => {
 
     const environmentallyPaused = !isInView || hoverPaused || focusPaused || pageHidden;
 
-    // Schedule only the next declarative cue. The story/run/index tuple makes
-    // callbacks from an earlier selection or replay harmless.
+    // Schedule one human-scale phase at a time. The full
+    // story/run/beat/phase tuple makes callbacks from an earlier selection,
+    // manual move, or replay harmless.
     useEffect(() => {
-        if (reducedMotion || environmentallyPaused || state.playback.status !== 'playing' || !cue) {
+        if (reducedMotion || environmentallyPaused || state.playback.status !== 'playing' || !phase) {
             return undefined;
         }
 
-        const previousAt = run.cueIndex === 0 ? 0 : story.cues[run.cueIndex - 1]?.at ?? 0;
-        const delay = Math.max(0, cue.at - previousAt);
         const timeout = window.setTimeout(() => {
-            dispatch({ type: 'TIMELINE_CUE', ...run });
-        }, delay);
+            dispatch({ type: 'ADVANCE_PHASE', ...run });
+        }, phase.durationMs);
         return () => window.clearTimeout(timeout);
-    }, [cue, environmentallyPaused, reducedMotion, run, state.playback.status, story.cues]);
+    }, [environmentallyPaused, phase?.durationMs, phase?.id, reducedMotion, run, state.playback.status]);
 
     // Coalesce state bursts into one wterm frame and skip identical screens.
     useEffect(() => {
@@ -174,19 +185,34 @@ export const FlowWorkbenchDemo: React.FC = () => {
         dispatch({ type: 'SELECT_STORY', storyId });
     }, []);
 
-    const stepCue = useCallback(() => {
-        dispatch({ type: 'STEP_CUE', ...currentRun(state) });
+    const previousBeat = useCallback(() => {
+        autoplayStartedRef.current = true;
+        const { storyId, runToken } = currentRun(state);
+        dispatch({ type: 'PREVIOUS_BEAT', storyId, runToken });
+    }, [state]);
+
+    const nextBeat = useCallback(() => {
+        autoplayStartedRef.current = true;
+        const { storyId, runToken } = currentRun(state);
+        dispatch({ type: 'NEXT_BEAT', storyId, runToken });
     }, [state]);
 
     const continueSample = useCallback(() => {
         autoplayStartedRef.current = true;
-        dispatch({ type: 'CONTINUE_SAMPLE', ...currentRun(state) });
+        const { storyId, runToken } = currentRun(state);
+        dispatch({ type: 'CONTINUE_SAMPLE', storyId, runToken });
     }, [state]);
 
     const inspectApply = useCallback(() => {
         autoplayStartedRef.current = true;
         dispatch({ type: 'REQUEST_APPLY' });
     }, []);
+
+    const resetGateResult = useCallback(() => {
+        autoplayStartedRef.current = true;
+        const { storyId, runToken } = currentRun(state);
+        dispatch({ type: 'RESET_GATE_RESULT', storyId, runToken });
+    }, [state]);
 
     const handleEvolveInput = useCallback((data: string) => {
         if (state.confirmAction) {
@@ -227,14 +253,46 @@ export const FlowWorkbenchDemo: React.FC = () => {
     }, [state.confirmAction, state.evolveStage, state.feedbackText]);
 
     const handleData = useCallback((data: string) => {
-        // Keyboard input is takeover just like pointer input. TAKE_OVER keeps
-        // the run token stable, so a same-event STEP_CUE remains current while
-        // any scheduled autoplay callback is rejected by the paused status.
-        takeOver();
-        if (state.storyId === 'evolve-safely' && handleEvolveInput(data)) return;
-
+        const isPreviousArrow = data === '\u001b[D';
+        const isNextArrow = data === '\u001b[C';
+        const isHorizontalArrow = isPreviousArrow || isNextArrow;
         const editingQuickIntent = state.storyId === 'quick-create'
             && (state.quickStage === 'question' || state.quickStage === 'answer');
+        const editingPersonalIntent = state.storyId === 'personal-flows'
+            && (state.personalStage === 'question' || state.personalStage === 'answer');
+        const editingFeedback = state.storyId === 'evolve-safely' && state.evolveStage === 'feedback';
+
+        // Arrow navigation belongs only to the focused terminal fixture. Never
+        // reinterpret editor, confirmation, or IME input as transport controls.
+        if (isHorizontalArrow && !terminalFocusedRef.current) return;
+        if (
+            isHorizontalArrow
+            && (
+                isComposingRef.current
+                || editingQuickIntent
+                || editingPersonalIntent
+                || editingFeedback
+                || state.confirmAction
+            )
+        ) {
+            takeOver();
+            return;
+        }
+
+        // Keyboard input is takeover just like pointer input. TAKE_OVER keeps
+        // the run token stable, so a same-event semantic move remains current
+        // while any scheduled autoplay callback is rejected by paused status.
+        takeOver();
+        if (isPreviousArrow) {
+            previousBeat();
+            return;
+        }
+        if (isNextArrow) {
+            nextBeat();
+            return;
+        }
+        if (state.storyId === 'evolve-safely' && handleEvolveInput(data)) return;
+
         if (editingQuickIntent && (data === '\u007f' || data === '\b')) {
             dispatch({
                 type: 'SET_CREATE_INTENT',
@@ -250,8 +308,6 @@ export const FlowWorkbenchDemo: React.FC = () => {
             }
         }
 
-        const editingPersonalIntent = state.storyId === 'personal-flows'
-            && (state.personalStage === 'question' || state.personalStage === 'answer');
         if (editingPersonalIntent && (data === '\u007f' || data === '\b')) {
             dispatch({
                 type: 'SET_PERSONAL_INTENT',
@@ -267,22 +323,24 @@ export const FlowWorkbenchDemo: React.FC = () => {
             }
         }
 
-        const isAdvance = data === '\r'
-            || data === '\n'
-            || data === ' '
-            || data === '\u001b[C'
-            || /^[nN]$/.test(data);
-        if (state.gate && (isAdvance || /^[gGcC]$/.test(data))) {
-            if (canContinueSample(state)) continueSample();
-            else if (state.gate === 'evolve-apply') inspectApply();
+        const isEnter = data === '\r' || data === '\n';
+        const isNextShortcut = data === ' ' || /^[nN]$/.test(data);
+        if (state.gate) {
+            // Semantic next controls stop at gates. Only an explicit gate
+            // action (Enter, G, C, or the visible CTA) crosses the boundary.
+            if (isNextShortcut) return;
+            if (isEnter || /^[gGcC]$/.test(data)) {
+                if (canContinueSample(state)) continueSample();
+                else if (state.gate === 'evolve-apply') inspectApply();
+            }
             return;
         }
-        if (isAdvance) {
-            stepCue();
+        if (isEnter || isNextShortcut) {
+            nextBeat();
             return;
         }
 
-    }, [continueSample, handleEvolveInput, inspectApply, state, stepCue, takeOver]);
+    }, [continueSample, handleEvolveInput, inspectApply, nextBeat, previousBeat, state, takeOver]);
 
     const playOrPause = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
         if (reducedMotion) return;
@@ -323,7 +381,10 @@ export const FlowWorkbenchDemo: React.FC = () => {
         background: '#070708',
     } as React.CSSProperties;
 
-    const progress = Math.round((state.playback.cueIndex / story.cues.length) * 100);
+    const progress = Math.round((state.playback.cueIndex / story.beats.length) * 100);
+    const previousEnabled = canPreviousBeat(state);
+    const nextEnabled = canNextBeat(state);
+    const showResetResult = canResetGateResult(state);
     const inspectionPaused = state.playback.status === 'playing' && (hoverPaused || focusPaused);
     const playbackAction = reducedMotion
         ? 'manual'
@@ -347,15 +408,17 @@ export const FlowWorkbenchDemo: React.FC = () => {
             : inspectionPaused
                 ? 'paused while you inspect'
                 : state.playback.status;
-    const showNextStep = reducedMotion || state.playback.status === 'idle' || state.playback.status === 'paused';
     const showContinue = canContinueSample(state);
     const showApplyBoundary = state.gate === 'evolve-apply' && !state.confirmAction;
+    const visibleCaptionSource = state.playback.status === 'playing' && beat
+        ? beat.caption
+        : state.caption;
     const visibleCaption = reducedMotion
-        ? `Reduced motion: autoplay is off. ${state.caption.replace(
+        ? `Reduced motion: autoplay is off. ${visibleCaptionSource.replace(
             'Use Play or step through it manually.',
             'Use Next step to continue.',
         )}`
-        : state.caption;
+        : visibleCaptionSource;
 
     return (
         <section
@@ -368,6 +431,9 @@ export const FlowWorkbenchDemo: React.FC = () => {
             data-story-id={state.storyId}
             data-playback-status={state.playback.status}
             data-cue-index={state.playback.cueIndex}
+            data-beat-id={beat?.id ?? 'complete'}
+            data-phase-kind={phase?.kind ?? 'none'}
+            data-phase-index={state.playback.phaseIndex}
             className="relative overflow-hidden border-t border-white/5 px-4 py-24 sm:px-6 md:py-32"
         >
             <div className="pointer-events-none absolute left-1/2 top-[-20%] h-[680px] w-[900px] -translate-x-1/2 rounded-full bg-orange-500/[0.08] blur-[150px]" />
@@ -450,7 +516,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
 
                         <div className="col-span-2 hidden rounded-xl border border-white/5 bg-black/20 px-4 py-3 text-xs leading-relaxed text-zinc-500 lg:col-span-1 lg:block">
                             <Keyboard size={15} className="mb-2 text-zinc-400" aria-hidden="true" />
-                            Choose a story to switch to manual mode. Hover, focus, or interact to pause; only Play resumes it.
+                            Previous and Next move one meaningful beat. In the focused terminal, use ← and →; gates still require confirmation.
                         </div>
                     </div>
 
@@ -460,7 +526,8 @@ export const FlowWorkbenchDemo: React.FC = () => {
                         viewport={{ once: true, margin: '-80px' }}
                         transition={{ duration: reducedMotion ? 0 : 0.55 }}
                         data-demo-shell
-                        className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[#070708] shadow-[0_30px_90px_rgba(0,0,0,0.55)]"
+                        data-terminal-focused={terminalFocused ? 'true' : 'false'}
+                        className="min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[#070708] shadow-[0_30px_90px_rgba(0,0,0,0.55)] transition-[border-color,box-shadow] duration-200 focus-within:border-orange-400/70 focus-within:ring-2 focus-within:ring-orange-400/35 focus-within:shadow-[0_0_0_1px_rgba(251,146,60,0.28),0_30px_90px_rgba(0,0,0,0.55)] motion-reduce:transition-none"
                     >
                         <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-zinc-950/90 px-4 py-2">
                             <div className="flex items-center gap-1.5" aria-hidden="true">
@@ -470,27 +537,29 @@ export const FlowWorkbenchDemo: React.FC = () => {
                             </div>
                             <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-500">
                                 <Sparkles size={12} className="text-orange-400" aria-hidden="true" />
-                                {story.shortTitle} · {pauseReason}
+                                {story.shortTitle} · {pauseReason}{terminalFocused ? ' · keyboard focus' : ''}
                             </div>
-                            <div className="flex items-center gap-1.5">
-                                {showNextStep && !state.gate && cue ? (
-                                    <button
-                                        type="button"
-                                        data-playback-control="next"
-                                        onClick={stepCue}
-                                        className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-white/10 px-3 py-1 font-mono text-[11px] text-zinc-300 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 sm:min-h-0 sm:px-2"
-                                    >
-                                        <StepForward size={12} aria-hidden="true" />
-                                        Next step
-                                    </button>
-                                ) : null}
+                            <div className="grid w-full grid-cols-2 gap-1.5 sm:flex sm:w-auto sm:items-center" aria-label="Walkthrough playback controls">
+                                <button
+                                    type="button"
+                                    data-playback-control="previous"
+                                    onClick={previousBeat}
+                                    disabled={!previousEnabled}
+                                    className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-white/10 px-3 py-1 font-mono text-[11px] text-zinc-300 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 disabled:cursor-not-allowed disabled:border-white/5 disabled:text-zinc-700 sm:px-2"
+                                    aria-label={`Previous step in ${story.shortTitle} walkthrough`}
+                                    aria-keyshortcuts="ArrowLeft"
+                                    title="Previous step (Left arrow in terminal)"
+                                >
+                                    <StepBack size={12} aria-hidden="true" />
+                                    Previous
+                                </button>
                                 <button
                                     type="button"
                                     data-playback-control="primary"
                                     data-playback-action={playbackAction}
                                     onClick={playOrPause}
                                     disabled={reducedMotion}
-                                    className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-white/10 px-3 py-1 font-mono text-[11px] text-zinc-300 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 disabled:cursor-default disabled:text-zinc-600 sm:min-h-0 sm:px-2"
+                                    className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-white/10 px-3 py-1 font-mono text-[11px] text-zinc-300 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 disabled:cursor-not-allowed disabled:border-white/5 disabled:text-zinc-700 sm:px-2"
                                     aria-label={reducedMotion ? 'Autoplay disabled by reduced motion preference' : `${playbackLabel} ${story.shortTitle} walkthrough`}
                                 >
                                     <PlaybackIcon size={12} aria-hidden="true" />
@@ -498,18 +567,40 @@ export const FlowWorkbenchDemo: React.FC = () => {
                                 </button>
                                 <button
                                     type="button"
+                                    data-playback-control="next"
+                                    onClick={nextBeat}
+                                    disabled={!nextEnabled}
+                                    className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-white/10 px-3 py-1 font-mono text-[11px] text-zinc-300 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 disabled:cursor-not-allowed disabled:border-white/5 disabled:text-zinc-700 sm:px-2"
+                                    aria-label={`Next step in ${story.shortTitle} walkthrough`}
+                                    aria-keyshortcuts="ArrowRight"
+                                    title="Next step (Right arrow in terminal)"
+                                >
+                                    <StepForward size={12} aria-hidden="true" />
+                                    Next step
+                                </button>
+                                <button
+                                    type="button"
                                     data-playback-control="restart"
                                     onClick={restart}
-                                    className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-white/10 p-1.5 text-zinc-500 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 sm:min-h-0 sm:min-w-0"
+                                    className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md border border-white/10 px-3 py-1 font-mono text-[11px] text-zinc-400 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 sm:px-2"
                                     aria-label={`Restart ${story.shortTitle} in manual mode`}
                                     title="Restart in manual mode"
                                 >
                                     <RotateCcw size={13} />
+                                    Restart
                                 </button>
                             </div>
                         </div>
 
-                        <div className="h-0.5 bg-white/5" role="progressbar" aria-label={`${story.shortTitle} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+                        <div
+                            className="h-0.5 bg-white/5"
+                            role="progressbar"
+                            aria-label={`${story.shortTitle} progress`}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={progress}
+                            aria-valuetext={`${state.playback.cueIndex} of ${story.beats.length} beats complete`}
+                        >
                             <div
                                 className="h-full bg-gradient-to-r from-orange-500 to-amber-300 transition-[width] duration-300 motion-reduce:transition-none"
                                 style={{ width: `${progress}%` }}
@@ -517,13 +608,30 @@ export const FlowWorkbenchDemo: React.FC = () => {
                         </div>
 
                         <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-zinc-950/60 px-4 py-2.5 text-sm text-zinc-300">
-                            <div className="min-w-0 flex-1" role="status" aria-live="polite" aria-atomic="true">
-                                <span className="mr-2 font-mono text-[10px] uppercase tracking-[0.18em] text-orange-400">
-                                    {state.storyId.replace('-', ' ')}
+                            <div className="min-w-0 flex-1">
+                                <span data-visible-caption aria-hidden="true">
+                                    <span className="mr-2 font-mono text-[10px] uppercase tracking-[0.18em] text-orange-400">
+                                        {state.storyId.replace('-', ' ')}
+                                    </span>
+                                    {visibleCaption}
                                 </span>
-                                {visibleCaption}
+                                <span data-live-caption className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                                    {state.caption}
+                                </span>
                             </div>
-                            {showContinue ? (
+                            {showResetResult ? (
+                                <button
+                                    type="button"
+                                    data-reset-gate-result={state.storyId}
+                                    data-playback-control="reset-result"
+                                    onClick={resetGateResult}
+                                    className="min-h-11 shrink-0 rounded-md border border-orange-400/30 bg-orange-400/10 px-3 py-1.5 font-mono text-[11px] text-orange-200 transition-colors hover:border-orange-300/60 hover:bg-orange-400/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300 sm:min-h-0"
+                                >
+                                    {state.storyId === 'evolve-safely'
+                                        ? 'Back to decision — reset demo result'
+                                        : 'Reset demo result'}
+                                </button>
+                            ) : showContinue ? (
                                 <button
                                     type="button"
                                     data-continue-sample={state.gate ?? undefined}
@@ -548,6 +656,9 @@ export const FlowWorkbenchDemo: React.FC = () => {
                             id="md-workbench-terminal"
                             data-terminal-story={state.storyId}
                             data-terminal-gate={state.gate ?? 'none'}
+                            data-beat-id={beat?.id ?? 'complete'}
+                            data-phase-kind={phase?.kind ?? 'none'}
+                            data-phase-index={state.playback.phaseIndex}
                             onPointerDown={takeOver}
                             className="h-[430px] min-w-0 bg-[#070708] sm:h-[500px]"
                             role="region"
@@ -555,10 +666,21 @@ export const FlowWorkbenchDemo: React.FC = () => {
                             aria-label={`${story.title} interactive terminal fixture. No repository is scanned, no engine runs, and no files are written.`}
                             onMouseEnter={() => setHoverPaused(true)}
                             onMouseLeave={() => setHoverPaused(false)}
-                            onFocusCapture={() => setFocusPaused(true)}
-                            onBlurCapture={(event) => {
-                                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusPaused(false);
+                            onFocusCapture={() => {
+                                terminalFocusedRef.current = true;
+                                setFocusPaused(true);
+                                setTerminalFocused(true);
                             }}
+                            onBlurCapture={(event) => {
+                                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                                    terminalFocusedRef.current = false;
+                                    isComposingRef.current = false;
+                                    setFocusPaused(false);
+                                    setTerminalFocused(false);
+                                }
+                            }}
+                            onCompositionStartCapture={() => { isComposingRef.current = true; }}
+                            onCompositionEndCapture={() => { isComposingRef.current = false; }}
                         >
                             {terminalError ? (
                                 <div className="flex h-full items-center justify-center p-8 text-center font-mono text-sm text-zinc-400">
@@ -581,6 +703,9 @@ export const FlowWorkbenchDemo: React.FC = () => {
                                         const active = document.activeElement;
                                         if (active instanceof HTMLElement && terminal.element.contains(active)) {
                                             active.blur();
+                                            terminalFocusedRef.current = false;
+                                            setTerminalFocused(false);
+                                            setFocusPaused(false);
                                         }
                                         setReady(true);
                                     }}
@@ -614,7 +739,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
                 </div>
 
                 <p className="mt-5 text-center text-sm font-light text-zinc-500 sm:hidden">
-                    Pick a story, then use Play, Next step, or the terminal. Autoplay never resumes after takeover unless you ask it to.
+                    Pick a story, then use Previous, Play, Next step, or the terminal. Gates still require confirmation.
                 </p>
             </div>
         </section>

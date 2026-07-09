@@ -6,30 +6,38 @@ import {
     type DemoFlow,
 } from './fixtures';
 import {
+    compileStory,
+    STORY_IDS,
     storyFor,
+    type CompiledPhase,
     type EvolveStage,
+    type FocusTarget,
     type PersonalFlowStage,
     type ProjectSetupStage,
     type QuickCreateStage,
+    type StoryBeat,
     type StoryCueAction,
     type StoryGate,
     type StoryId,
-    type TimelineCue,
+    type TypingField,
 } from './stories';
 
 export type { DemoFlow } from './fixtures';
 export type {
     EvolveStage,
+    FocusTarget,
     PersonalFlowStage,
     ProjectSetupStage,
     QuickCreateStage,
+    CompiledPhase,
+    StoryBeat,
     StoryDefinition,
     StoryGate,
     StoryId,
-    TimelineCue,
+    TypingField,
 } from './stories';
 export { MOCK_FLOWS } from './fixtures';
-export { STORIES, STORY_BY_ID, STORY_IDS, storyFor } from './stories';
+export { compileStory, STORIES, STORY_BY_ID, STORY_IDS, storyFor } from './stories';
 
 export type DemoScreen = 'project-setup' | 'quick-create' | 'improve' | 'personal-flows';
 export type PlaybackStatus = 'idle' | 'playing' | 'paused' | 'complete';
@@ -57,9 +65,19 @@ export interface DemoState {
     savedPersonalFlow: DemoFlow | null;
     gate: StoryGate | null;
     caption: string;
+    /** Presentation is reducer-owned so timing, rewind, and screenshots agree. */
+    presentation: {
+        focus: FocusTarget | null;
+        typingField: TypingField | null;
+        typingText: string;
+        typingActive: boolean;
+    };
     playback: {
         status: PlaybackStatus;
+        /** Number of fully completed semantic beats. */
         cueIndex: number;
+        /** Absolute cursor into the story's compiled phase array. */
+        phaseIndex: number;
         takenOver: boolean;
         /** Changes whenever a timer from a prior run must become invalid. */
         runToken: number;
@@ -97,9 +115,16 @@ function baseState(storyId: StoryId, play: boolean, runToken: number): DemoState
         caption: play
             ? storyFor(storyId).startCaption
             : `${storyFor(storyId).shortTitle} ready. Use Play or step through it manually.`,
+        presentation: {
+            focus: null,
+            typingField: null,
+            typingText: '',
+            typingActive: false,
+        },
         playback: {
             status: play ? 'playing' : 'idle',
             cueIndex: 0,
+            phaseIndex: 0,
             takenOver: false,
             runToken,
         },
@@ -170,8 +195,16 @@ export type DemoAction =
     | { type: 'PLAY' }
     | { type: 'PAUSE' }
     | { type: 'RESTART'; play?: boolean }
-    | { type: 'TIMELINE_CUE'; storyId: StoryId; runToken: number; cueIndex: number }
-    | { type: 'STEP_CUE'; storyId: StoryId; runToken: number; cueIndex: number }
+    | {
+        type: 'ADVANCE_PHASE';
+        storyId: StoryId;
+        runToken: number;
+        cueIndex: number;
+        phaseIndex: number;
+    }
+    | { type: 'NEXT_BEAT'; storyId: StoryId; runToken: number }
+    | { type: 'PREVIOUS_BEAT'; storyId: StoryId; runToken: number }
+    | { type: 'RESET_GATE_RESULT'; storyId: StoryId; runToken: number }
     | { type: 'CONTINUE_SAMPLE'; storyId: StoryId; runToken: number };
 
 function reduceStoryAction(state: DemoState, action: StoryCueAction, fromCue = false): DemoState {
@@ -205,6 +238,9 @@ function reduceStoryAction(state: DemoState, action: StoryCueAction, fromCue = f
                     : action.intent.slice(0, 120),
                 createIntentEdited: fromCue ? state.createIntentEdited : true,
                 createSaved: false,
+                presentation: fromCue
+                    ? state.presentation
+                    : { focus: 'intent-input', typingField: null, typingText: '', typingActive: false },
             };
         case 'SET_EVOLVE_STAGE':
             return {
@@ -226,6 +262,9 @@ function reduceStoryAction(state: DemoState, action: StoryCueAction, fromCue = f
                     : action.feedback.slice(0, 160),
                 feedbackEdited: fromCue ? state.feedbackEdited : true,
                 feedbackSaved: false,
+                presentation: fromCue
+                    ? state.presentation
+                    : { focus: 'feedback-input', typingField: null, typingText: '', typingActive: false },
             };
         case 'SET_PERSONAL_STAGE':
             return {
@@ -243,6 +282,9 @@ function reduceStoryAction(state: DemoState, action: StoryCueAction, fromCue = f
                     : action.intent.slice(0, 120),
                 personalIntentEdited: fromCue ? state.personalIntentEdited : true,
                 personalSaved: false,
+                presentation: fromCue
+                    ? state.presentation
+                    : { focus: 'intent-input', typingField: null, typingText: '', typingActive: false },
             };
     }
 }
@@ -258,6 +300,7 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                 feedbackSaved: false,
                 confirmAction: null,
                 caption: 'F opened feedback. Describe an observed miss; evidence is not proof.',
+                presentation: { focus: 'feedback-input', typingField: null, typingText: '', typingActive: false },
             };
         case 'SAVE_FEEDBACK':
             return state.feedbackText.trim()
@@ -266,6 +309,7 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                     evolveStage: 'feedback-saved',
                     feedbackSaved: true,
                     caption: 'Feedback saved to browser memory only. P previews readiness for free.',
+                    presentation: { focus: 'feedback-input', typingField: null, typingText: '', typingActive: false },
                 }
                 : state;
         case 'CANCEL_FEEDBACK':
@@ -274,8 +318,15 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                     ...state,
                     evolveStage: state.proposalFixtureLoaded ? 'decision' : 'sample-result',
                     feedbackText: '',
+                    feedbackEdited: false,
                     feedbackSaved: false,
                     caption: 'Feedback cancelled. No evidence was recorded.',
+                    presentation: {
+                        focus: state.proposalFixtureLoaded ? 'decision' : 'sample-result',
+                        typingField: null,
+                        typingText: '',
+                        typingActive: false,
+                    },
                 }
                 : state;
         case 'PLAN':
@@ -286,6 +337,7 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                 evolveStage: 'plan',
                 confirmAction: null,
                 caption: 'P opened the free readiness plan. No engine ran and no source changed.',
+                presentation: { focus: 'plan', typingField: null, typingText: '', typingActive: false },
             };
         case 'LOAD_PROPOSAL_FIXTURE':
             return {
@@ -296,14 +348,25 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                 proposalFixtureLoaded: true,
                 confirmAction: null,
                 caption: 'O loaded a precomputed proposal fixture. The browser did not run or verify it.',
+                presentation: { focus: 'proposal', typingField: null, typingText: '', typingActive: false },
             };
         case 'SHOW_DIFF':
             return state.proposalFixtureLoaded
-                ? { ...state, evolveStage: 'diff', confirmAction: null }
+                ? {
+                    ...state,
+                    evolveStage: 'diff',
+                    confirmAction: null,
+                    presentation: { focus: 'diff', typingField: null, typingText: '', typingActive: false },
+                }
                 : state;
         case 'SHOW_DECISION':
             return state.proposalFixtureLoaded
-                ? { ...state, evolveStage: 'decision', confirmAction: null }
+                ? {
+                    ...state,
+                    evolveStage: 'decision',
+                    confirmAction: null,
+                    presentation: { focus: 'decision', typingField: null, typingText: '', typingActive: false },
+                }
                 : state;
         case 'REQUEST_APPLY':
             return state.proposalFixtureLoaded && ['proposal', 'diff', 'decision'].includes(state.evolveStage)
@@ -312,6 +375,7 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                     evolveStage: 'decision',
                     confirmAction: 'apply',
                     caption: 'Apply confirmation open. Enter or C confirms; Escape cancels.',
+                    presentation: { focus: 'confirmation', typingField: null, typingText: '', typingActive: false },
                 }
                 : state;
         case 'REQUEST_ROLLBACK':
@@ -320,6 +384,7 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                     ...state,
                     confirmAction: 'rollback',
                     caption: 'Rollback confirmation open. Enter or C confirms; Escape cancels.',
+                    presentation: { focus: 'confirmation', typingField: null, typingText: '', typingActive: false },
                 }
                 : state;
         case 'APPLY_FIXTURE':
@@ -330,6 +395,7 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                     confirmAction: null,
                     gate: null,
                     caption: 'Applied in browser memory only. No source file changed.',
+                    presentation: { focus: 'confirmation', typingField: null, typingText: '', typingActive: false },
                 }
                 : state;
         case 'ROLLBACK_FIXTURE':
@@ -339,6 +405,7 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                     evolveStage: 'rolled-back',
                     confirmAction: null,
                     caption: 'Rolled back in browser memory only. No source file changed.',
+                    presentation: { focus: 'confirmation', typingField: null, typingText: '', typingActive: false },
                 }
                 : state;
         case 'CANCEL_CONFIRM':
@@ -347,37 +414,160 @@ function reduceManualAction(state: DemoState, action: ManualDomainAction): DemoS
                     ...state,
                     confirmAction: null,
                     caption: 'Local-write confirmation cancelled. Demo state is unchanged.',
+                    presentation: { focus: 'decision', typingField: null, typingText: '', typingActive: false },
                 }
                 : state;
     }
 }
 
-function applyCue(state: DemoState, cue: TimelineCue, manual: boolean): DemoState {
-    const next = reduceStoryAction(state, cue.action, true);
+const COMPILED_STORIES = Object.fromEntries(
+    STORY_IDS.map((storyId) => [storyId, compileStory(storyFor(storyId))]),
+) as Record<StoryId, CompiledPhase[]>;
+
+export interface UserDrafts {
+    createIntent: string;
+    createIntentEdited: boolean;
+    personalIntent: string;
+    personalIntentEdited: boolean;
+    feedbackText: string;
+    feedbackEdited: boolean;
+}
+
+function draftsFrom(state: DemoState): UserDrafts {
     return {
-        ...next,
-        gate: cue.gate ?? null,
-        caption: cue.caption ?? state.caption,
+        createIntent: state.createIntent,
+        createIntentEdited: state.createIntentEdited,
+        personalIntent: state.personalIntent,
+        personalIntentEdited: state.personalIntentEdited,
+        feedbackText: state.feedbackText,
+        feedbackEdited: state.feedbackEdited,
+    };
+}
+
+function editedDraft(state: DemoState, field: TypingField | null): string | null {
+    if (field === 'createIntent' && state.createIntentEdited) return state.createIntent;
+    if (field === 'personalIntent' && state.personalIntentEdited) return state.personalIntent;
+    if (field === 'feedbackText' && state.feedbackEdited) return state.feedbackText;
+    return null;
+}
+
+function applyPhase(state: DemoState, phase: CompiledPhase): DemoState {
+    const withAction = phase.action ? reduceStoryAction(state, phase.action, true) : state;
+    const draft = editedDraft(withAction, phase.typingField);
+    return {
+        ...withAction,
+        gate: phase.gate ?? withAction.gate,
+        caption: phase.caption ?? withAction.caption,
+        presentation: {
+            focus: phase.focus,
+            typingField: phase.typingField,
+            typingText: draft ?? phase.typingText,
+            typingActive: draft === null && phase.typingActive,
+        },
         playback: {
-            ...state.playback,
-            cueIndex: state.playback.cueIndex + 1,
-            status: cue.stop ? 'complete' : manual ? state.playback.status : 'playing',
-            takenOver: manual || state.playback.takenOver,
+            ...withAction.playback,
+            cueIndex: withAction.playback.cueIndex + (phase.completesBeat ? 1 : 0),
+            phaseIndex: withAction.playback.phaseIndex + 1,
+            status: phase.stop ? 'complete' : withAction.playback.status,
         },
     };
 }
 
+function phasesThroughBeat(storyId: StoryId, completedBeatCount: number): number {
+    const phases = COMPILED_STORIES[storyId];
+    let phaseCount = 0;
+    for (const phase of phases) {
+        if (phase.beatIndex >= completedBeatCount) break;
+        phaseCount += 1;
+    }
+    return phaseCount;
+}
+
+/** Reconstruct a semantic checkpoint from absolute safe setters, never inverse actions. */
+export function rebuildAtBeat(
+    storyId: StoryId,
+    completedBeatCount: number,
+    drafts: UserDrafts,
+    runToken: number,
+): DemoState {
+    const story = storyFor(storyId);
+    const target = Math.max(0, Math.min(completedBeatCount, story.beats.length));
+    let rebuilt = baseState(storyId, false, runToken);
+    const phaseCount = phasesThroughBeat(storyId, target);
+    for (let index = 0; index < phaseCount; index += 1) {
+        rebuilt = applyPhase(rebuilt, COMPILED_STORIES[storyId][index]!);
+    }
+
+    rebuilt = {
+        ...rebuilt,
+        createIntent: drafts.createIntentEdited ? drafts.createIntent : rebuilt.createIntent,
+        createIntentEdited: drafts.createIntentEdited,
+        personalIntent: drafts.personalIntentEdited ? drafts.personalIntent : rebuilt.personalIntent,
+        personalIntentEdited: drafts.personalIntentEdited,
+        feedbackText: drafts.feedbackEdited ? drafts.feedbackText : rebuilt.feedbackText,
+        feedbackEdited: drafts.feedbackEdited,
+        presentation: {
+            ...rebuilt.presentation,
+            typingText: rebuilt.presentation.typingField === 'createIntent' && drafts.createIntentEdited
+                ? drafts.createIntent
+                : rebuilt.presentation.typingField === 'personalIntent' && drafts.personalIntentEdited
+                    ? drafts.personalIntent
+                    : rebuilt.presentation.typingField === 'feedbackText' && drafts.feedbackEdited
+                        ? drafts.feedbackText
+                        : rebuilt.presentation.typingText,
+            typingActive: false,
+        },
+        playback: {
+            ...rebuilt.playback,
+            status: rebuilt.gate ? 'complete' : 'paused',
+            takenOver: true,
+        },
+    };
+    return rebuilt;
+}
+
 function matchingRun(
     state: DemoState,
-    action: { storyId: StoryId; runToken: number; cueIndex?: number },
+    action: { storyId: StoryId; runToken: number; cueIndex?: number; phaseIndex?: number },
 ): boolean {
     return action.storyId === state.storyId
         && action.runToken === state.playback.runToken
-        && (action.cueIndex === undefined || action.cueIndex === state.playback.cueIndex);
+        && (action.cueIndex === undefined || action.cueIndex === state.playback.cueIndex)
+        && (action.phaseIndex === undefined || action.phaseIndex === state.playback.phaseIndex);
 }
 
-export function currentCue(state: DemoState): TimelineCue | undefined {
-    return storyFor(state.storyId).cues[state.playback.cueIndex];
+export function currentPhase(state: DemoState): CompiledPhase | undefined {
+    return COMPILED_STORIES[state.storyId][state.playback.phaseIndex];
+}
+
+export function currentBeat(state: DemoState): StoryBeat | undefined {
+    return storyFor(state.storyId).beats[state.playback.cueIndex];
+}
+
+/** Compatibility name: a cue is now one semantic beat, not a timer frame. */
+export const currentCue = currentBeat;
+
+export function hasGateOutcome(state: DemoState): boolean {
+    return state.projectStage === 'receipt'
+        || state.createSaved
+        || state.personalSaved
+        || state.evolveStage === 'applied'
+        || state.evolveStage === 'rolled-back';
+}
+
+export function canPreviousBeat(state: DemoState): boolean {
+    return !hasGateOutcome(state) && !state.confirmAction && state.playback.cueIndex > 0;
+}
+
+export function canNextBeat(state: DemoState): boolean {
+    return !hasGateOutcome(state)
+        && !state.confirmAction
+        && !state.gate
+        && state.playback.cueIndex < storyFor(state.storyId).beats.length;
+}
+
+export function canResetGateResult(state: DemoState): boolean {
+    return hasGateOutcome(state);
 }
 
 export function canContinueSample(state: DemoState): boolean {
@@ -393,6 +583,7 @@ function continueSample(state: DemoState): DemoState {
             projectStage: 'receipt',
             gate: null,
             caption: 'Sample continued after your click: mock receipt plus a free verification plan.',
+            presentation: { focus: 'write-gate', typingField: null, typingText: '', typingActive: false },
         };
     }
     if (state.gate === 'quick-create-enter') {
@@ -405,6 +596,7 @@ function continueSample(state: DemoState): DemoState {
             savedFlow: flowFromIntent(intent),
             gate: null,
             caption: 'Enter simulated a create-only project write in browser memory. The flow is not evaluated.',
+            presentation: { focus: 'intent-input', typingField: null, typingText: '', typingActive: false },
         };
     }
     if (state.gate === 'personal-create-enter') {
@@ -417,6 +609,7 @@ function continueSample(state: DemoState): DemoState {
             savedPersonalFlow: flowFromIntent(intent, 'personal'),
             gate: null,
             caption: 'Enter simulated a personal create, then a free resolution plan from another mock project.',
+            presentation: { focus: 'personal-resolution', typingField: null, typingText: '', typingActive: false },
         };
     }
     return state;
@@ -445,7 +638,7 @@ export function demoReducer(state: DemoState, action: DemoAction): DemoState {
                     : state.caption,
             };
         case 'PLAY':
-            return state.playback.status === 'complete'
+            return state.playback.status === 'complete' || !currentPhase(state)
                 ? state
                 : {
                     ...state,
@@ -469,17 +662,42 @@ export function demoReducer(state: DemoState, action: DemoAction): DemoState {
                     : `${storyFor(state.storyId).shortTitle} restarted. Press Play or Next step.`,
             };
         }
-        case 'TIMELINE_CUE': {
+        case 'ADVANCE_PHASE': {
             if (state.playback.status !== 'playing' || !matchingRun(state, action)) return state;
-            const cue = currentCue(state);
-            return cue ? applyCue(state, cue, false) : state;
+            const phase = currentPhase(state);
+            return phase ? applyPhase(state, phase) : state;
         }
-        case 'STEP_CUE': {
-            if (state.playback.status === 'playing' || state.playback.status === 'complete' || !matchingRun(state, action)) {
-                return state;
-            }
-            const cue = currentCue(state);
-            return cue ? applyCue(state, cue, true) : state;
+        case 'NEXT_BEAT': {
+            if (!matchingRun(state, action) || !canNextBeat(state)) return state;
+            return rebuildAtBeat(
+                state.storyId,
+                state.playback.cueIndex + 1,
+                draftsFrom(state),
+                state.playback.runToken + 1,
+            );
+        }
+        case 'PREVIOUS_BEAT': {
+            if (!matchingRun(state, action) || !canPreviousBeat(state)) return state;
+            return rebuildAtBeat(
+                state.storyId,
+                state.playback.cueIndex - 1,
+                draftsFrom(state),
+                state.playback.runToken + 1,
+            );
+        }
+        case 'RESET_GATE_RESULT': {
+            if (!matchingRun(state, action) || !canResetGateResult(state)) return state;
+            const gateIndex = storyFor(state.storyId).beats.findIndex((beat) => beat.gate);
+            const reset = rebuildAtBeat(
+                state.storyId,
+                Math.max(0, gateIndex + 1),
+                draftsFrom(state),
+                state.playback.runToken + 1,
+            );
+            return {
+                ...reset,
+                caption: 'Demo result reset. The write boundary is ready for a fresh decision.',
+            };
         }
         case 'CONTINUE_SAMPLE':
             return matchingRun(state, action) ? continueSample(state) : state;
@@ -502,11 +720,16 @@ export function demoReducer(state: DemoState, action: DemoAction): DemoState {
 }
 
 /** Useful for controls that dispatch metadata without reaching into state shape. */
-export function currentRun(state: DemoState): Pick<DemoState, 'storyId'> & { runToken: number; cueIndex: number } {
+export function currentRun(state: DemoState): Pick<DemoState, 'storyId'> & {
+    runToken: number;
+    cueIndex: number;
+    phaseIndex: number;
+} {
     return {
         storyId: state.storyId,
         runToken: state.playback.runToken,
         cueIndex: state.playback.cueIndex,
+        phaseIndex: state.playback.phaseIndex,
     };
 }
 

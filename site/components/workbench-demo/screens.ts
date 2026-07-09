@@ -6,11 +6,11 @@ import {
 } from './fixtures';
 import type { DemoState } from './model';
 import { shellQuote, slugifyIntent } from './model';
+import type { FocusTarget, TypingField } from './stories';
 
 const ESC = '\u001b[';
 const ANSI = {
     clear: `${ESC}2J${ESC}H`,
-    cursorOn: `${ESC}?25h`,
     cursorOff: `${ESC}?25l`,
     reset: `${ESC}0m`,
     orange: `${ESC}38;2;251;146;60m`,
@@ -27,6 +27,73 @@ const ANSI = {
 const paint = (color: string, value: string) => `${color}${value}${ANSI.reset}`;
 const characters = (value: string) => Array.from(value);
 const SGR_CODES = /\u001b\[[0-9;]*m/g;
+
+export interface ScreenLine {
+    id?: FocusTarget;
+    content: string;
+}
+
+type ScreenLineInput = ScreenLine | string;
+
+/**
+ * Keeps every internally-rendered row as a ScreenLine while preserving the
+ * concise `lines.push('copy')` authoring style used by the fixture screens.
+ */
+class ScreenLines extends Array<ScreenLine> {
+    override push(...items: ScreenLineInput[]): number {
+        return super.push(...items.map((item) => typeof item === 'string' ? { content: item } : item));
+    }
+}
+
+function screenLines(...items: ScreenLineInput[]): ScreenLines {
+    const lines = new ScreenLines();
+    lines.push(...items);
+    return lines;
+}
+
+function identified(id: FocusTarget, content: string): ScreenLine {
+    return { id, content };
+}
+
+interface ScreenPresentation {
+    focus: FocusTarget | null;
+    typingField: TypingField | null;
+    typingText: string;
+    typingActive: boolean;
+}
+
+const EMPTY_PRESENTATION: ScreenPresentation = {
+    focus: null,
+    typingField: null,
+    typingText: '',
+    typingActive: false,
+};
+
+function presentationOf(state: DemoState): ScreenPresentation {
+    return (state as DemoState & { presentation?: ScreenPresentation }).presentation ?? EMPTY_PRESENTATION;
+}
+
+function presentationText(state: DemoState, field: TypingField, value: string): string {
+    const presentation = presentationOf(state);
+    return presentation.typingActive && presentation.typingField === field
+        ? presentation.typingText
+        : value;
+}
+
+function textCaret(state: DemoState, field: TypingField, manuallyEdited: boolean, reducedMotion: boolean): string {
+    if (reducedMotion) return '';
+    const presentation = presentationOf(state);
+    const target: FocusTarget = field === 'feedbackText' ? 'feedback-input' : 'intent-input';
+    const scripted = presentation.typingActive
+        && presentation.typingField === field
+        && presentation.focus === target;
+    const manual = manuallyEdited && presentation.focus === target;
+    return scripted || manual ? paint(ANSI.orange, '▌') : '';
+}
+
+function focusCaret(state: DemoState, target: FocusTarget, reducedMotion: boolean): string {
+    return !reducedMotion && presentationOf(state).focus === target ? paint(ANSI.orange, '▌') : '';
+}
 
 export function stripAnsi(value: string): string {
     return value.replace(SGR_CODES, '');
@@ -90,27 +157,27 @@ function label(kind: 'FREE' | 'ENGINE' | 'LOCAL WRITE'): string {
     return paint(colors[kind], `[${kind}]`);
 }
 
-function header(title: string, width: number): string[] {
-    return [
+function header(title: string, width: number): ScreenLine[] {
+    return screenLines(
         sides(` md · ${title}`, 'BROWSER SIMULATION · NO FILES / ENGINES', width, ANSI.orange, ANSI.dim),
         rule(width),
-    ];
+    );
 }
 
-function promptLine(intent: string, placeholder: string): string {
+function promptLine(intent: string, placeholder: string, caret = ''): string {
     return `${paint(ANSI.orange, '?')} ${paint(ANSI.white, 'What should this flow do?')}  ${paint(
         intent ? ANSI.white : ANSI.dim,
         intent || placeholder,
-    )}`;
+    )}${caret}`;
 }
 
-function projectSetupScreen(state: DemoState, width: number): string[] {
-    const lines = header('guided project setup', width);
+function projectSetupScreen(state: DemoState, width: number, reducedMotion: boolean): ScreenLine[] {
+    const lines = screenLines(...header('guided project setup', width));
     lines.push(sides(PROJECT_FIXTURE.cwd, 'SAMPLE TRANSCRIPT · FIXTURE', width, ANSI.zinc, ANSI.yellow));
     lines.push('');
 
     if (state.projectStage === 'command') {
-        lines.push(`${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md init --guided')}`);
+        lines.push(identified('shell-command', `${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md init --guided')}`));
         lines.push('');
         lines.push(paint(ANSI.white, 'Project-aware setup proposes a roster before it writes.'));
         lines.push(paint(ANSI.zinc, 'The real command first asks permission to launch your selected engine.'));
@@ -120,11 +187,11 @@ function projectSetupScreen(state: DemoState, width: number): string[] {
     }
 
     if (state.projectStage === 'consent') {
-        lines.push(`${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md init --guided')}`);
-        lines.push(`${paint(ANSI.orange, '?')} Which agent should guide your setup? ${paint(ANSI.white, '› codex')}`);
+        lines.push(identified('shell-command', `${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md init --guided')}`));
+        lines.push(identified('consent-agent', `${paint(ANSI.orange, '?')} Which agent should guide your setup? ${paint(ANSI.white, '› codex')}`));
         lines.push('');
         lines.push(paint(ANSI.white, 'This launches codex interactively in this repo.'));
-        lines.push(`${paint(ANSI.orange, '?')} Launch codex? ${paint(ANSI.zinc, '(Y/n)')} ${paint(ANSI.white, '› y')}`);
+        lines.push(identified('consent-launch', `${paint(ANSI.orange, '?')} Launch codex? ${paint(ANSI.zinc, '(Y/n)')} ${paint(ANSI.white, '› y')}`));
         lines.push('');
         lines.push(`${label('ENGINE')} ${paint(ANSI.yellow, 'consented sample boundary')}`);
         lines.push(paint(ANSI.yellow, 'Fixture only. The browser did not launch codex or inspect a repository.'));
@@ -134,7 +201,7 @@ function projectSetupScreen(state: DemoState, width: number): string[] {
     if (state.projectStage === 'inspection') {
         lines.push(`${label('ENGINE')} ${paint(ANSI.yellow, 'SAMPLE GUIDED SESSION · FIXTURE')}`);
         lines.push('');
-        lines.push(paint(ANSI.white, 'Inspecting package manifests, scripts, CI, docs, and recent history…'));
+        lines.push(identified('shell-command', paint(ANSI.white, 'Inspecting package manifests, scripts, CI, docs, and recent history…')));
         lines.push(`${paint(ANSI.green, '✓')} ${PROJECT_FIXTURE.stack}`);
         lines.push(`${paint(ANSI.green, '✓')} release workflow and repository conventions mapped`);
         lines.push(`${paint(ANSI.green, '✓')} existing flows checked before proposing additions`);
@@ -147,18 +214,18 @@ function projectSetupScreen(state: DemoState, width: number): string[] {
         lines.push(`${label('ENGINE')} ${paint(ANSI.white, 'Suggested starter roster · fixture')}`);
         lines.push('');
         for (const suggestion of PROJECT_SUGGESTIONS) {
-            lines.push(paint(ANSI.white, `${suggestion.number}. ${suggestion.slug}`));
+            lines.push(identified(`suggestion-${suggestion.number}` as FocusTarget, paint(ANSI.white, `${suggestion.number}. ${suggestion.slug}`)));
             lines.push(paint(ANSI.zinc, `   ${clip(suggestion.description, Math.max(8, width - 3))}`));
             if (width >= 68) lines.push(paint(ANSI.dim, `   inlines: ${suggestion.context}`));
         }
         lines.push('');
         lines.push(paint(ANSI.white, 'Which should we keep, drop, or change?'));
-        lines.push(`${paint(ANSI.orange, 'You ›')} ${paint(
+        lines.push(identified('selection-reply', `${paint(ANSI.orange, 'You ›')} ${paint(
             state.projectSelection.length > 0 ? ANSI.white : ANSI.dim,
             state.projectSelection.length > 0
                 ? `Keep 1 and 3. Drop 2 and 4. Default engine: ${PROJECT_FIXTURE.engine}.`
                 : 'reply with numbers',
-        )}`);
+        )}${focusCaret(state, 'selection-reply', reducedMotion)}`));
         lines.push(paint(ANSI.dim, 'Numbered conversation—not a package-install checklist.'));
         return lines;
     }
@@ -174,12 +241,12 @@ function projectSetupScreen(state: DemoState, width: number): string[] {
         lines.push(paint(ANSI.zinc, `Project default engine: ${PROJECT_FIXTURE.engine}`));
         lines.push('');
         lines.push(`${label('LOCAL WRITE')} ${paint(ANSI.white, 'Type go to approve this exact roster:')}`);
-        lines.push(`${paint(ANSI.orange, 'You ›')} ${paint(ANSI.dim, '█')}`);
+        lines.push(identified('write-gate', `${paint(ANSI.orange, 'You ›')} ${focusCaret(state, 'write-gate', reducedMotion)}`));
         lines.push(paint(ANSI.yellow, 'Autoplay stopped. Nothing is written until you continue the sample.'));
         return lines;
     }
 
-    lines.push(`${paint(ANSI.orange, 'You ›')} ${paint(ANSI.white, 'go')}`);
+    lines.push(identified('write-gate', `${paint(ANSI.orange, 'You ›')} ${paint(ANSI.white, 'go')}`));
     lines.push(`${paint(ANSI.green, 'SAMPLE RECEIPT AFTER EXPLICIT go')} ${label('LOCAL WRITE')}`);
     lines.push('');
     for (const number of state.projectSelection) {
@@ -195,20 +262,20 @@ function projectSetupScreen(state: DemoState, width: number): string[] {
     return lines;
 }
 
-function quickCreateScreen(state: DemoState, width: number): string[] {
-    const lines = header('quick create', width);
+function quickCreateScreen(state: DemoState, width: number, reducedMotion: boolean): ScreenLine[] {
+    const lines = screenLines(...header('quick create', width));
     lines.push(sides(PROJECT_FIXTURE.cwd, 'ONE QUESTION · PROJECT FLOW', width, ANSI.zinc, ANSI.green));
     lines.push('');
 
     if (state.quickStage === 'empty') {
-        lines.push(`${paint(ANSI.zinc, '$')} ${paint(ANSI.dim, '█')}`);
+        lines.push(identified('shell-command', `${paint(ANSI.zinc, '$')} ${focusCaret(state, 'shell-command', reducedMotion)}`));
         lines.push('');
         lines.push(paint(ANSI.zinc, 'An empty terminal is enough.'));
         return lines;
     }
 
     if (state.quickStage === 'command') {
-        lines.push(`${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create')}`);
+        lines.push(identified('shell-command', `${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create')}`));
         lines.push('');
         lines.push(paint(ANSI.zinc, 'No flags, form, or template selection required.'));
         return lines;
@@ -217,8 +284,8 @@ function quickCreateScreen(state: DemoState, width: number): string[] {
     if (state.quickStage === 'receipt') {
         const intent = state.createIntent;
         const slug = slugifyIntent(intent);
-        lines.push(`${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create')}`);
-        lines.push(promptLine(intent, 'Describe the repeatable outcome'));
+        lines.push(identified('shell-command', `${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create')}`));
+        lines.push(identified('intent-input', promptLine(intent, 'Describe the repeatable outcome')));
         lines.push('');
         lines.push(`${label('LOCAL WRITE')} ${paint(ANSI.green, `Created flow: ${PROJECT_FIXTURE.cwd}/flows/${slug}.md`)}`);
         lines.push(paint(ANSI.zinc, 'Added project support only when missing; existing paths stay untouched.'));
@@ -228,13 +295,18 @@ function quickCreateScreen(state: DemoState, width: number): string[] {
         return lines;
     }
 
-    lines.push(`${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create')}`);
-    lines.push(promptLine(state.createIntent, 'Describe the repeatable outcome'));
+    const intent = presentationText(state, 'createIntent', state.createIntent);
+    lines.push(identified('shell-command', `${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create')}`));
+    lines.push(identified('intent-input', promptLine(
+        intent,
+        'Describe the repeatable outcome',
+        textCaret(state, 'createIntent', state.createIntentEdited, reducedMotion),
+    )));
     lines.push('');
     if (state.quickStage === 'question') {
         lines.push(paint(ANSI.zinc, 'Answer in plain language. That is the whole interactive path.'));
     } else {
-        lines.push(`${label('LOCAL WRITE')} ${paint(ANSI.white, 'Enter create project flow')}`);
+        lines.push(identified('write-gate', `${label('LOCAL WRITE')} ${paint(ANSI.white, 'Enter create project flow')}`));
         if (state.quickStage === 'enter-boundary') {
             lines.push(paint(ANSI.yellow, 'Autoplay stopped before Enter. No file has been created.'));
         }
@@ -242,14 +314,14 @@ function quickCreateScreen(state: DemoState, width: number): string[] {
     return lines;
 }
 
-function confirmationScreen(state: DemoState, width: number): string[] {
+function confirmationScreen(state: DemoState, width: number): ScreenLine[] {
     const rollback = state.confirmAction === 'rollback';
     const command = rollback
         ? `md evolve rollback ${EVOLUTION_FIXTURE.proposalId}`
         : `md evolve apply ${EVOLUTION_FIXTURE.proposalId}`;
-    return [
+    return screenLines(
         ...header('evolve · confirmation', width),
-        paint(ANSI.blue, 'CONFIRM LOCAL WRITE · DEMO FIXTURE'),
+        identified('confirmation', paint(ANSI.blue, 'CONFIRM LOCAL WRITE · DEMO FIXTURE')),
         '',
         paint(ANSI.white, rollback
             ? `Roll back sample apply ${EVOLUTION_FIXTURE.proposalId}?`
@@ -258,18 +330,18 @@ function confirmationScreen(state: DemoState, width: number): string[] {
         paint(ANSI.yellow, 'The browser can change demo state only; it cannot write your files.'),
         '',
         paint(ANSI.zinc, `Shell: ${command}`),
-        `${label('LOCAL WRITE')} ${paint(ANSI.blue, 'Enter / C confirm')}   ${paint(ANSI.dim, 'Esc cancel')}`,
-    ];
+        identified('write-gate', `${label('LOCAL WRITE')} ${paint(ANSI.blue, 'Enter / C confirm')}   ${paint(ANSI.dim, 'Esc cancel')}`),
+    );
 }
 
-function evolveScreen(state: DemoState, width: number): string[] {
+function evolveScreen(state: DemoState, width: number, reducedMotion: boolean): ScreenLine[] {
     if (state.confirmAction) return confirmationScreen(state, width);
-    const lines = header(`evolve · ${EVOLUTION_FIXTURE.flow}.md`, width);
+    const lines = screenLines(...header(`evolve · ${EVOLUTION_FIXTURE.flow}.md`, width));
     lines.push(sides('Evidence → Plan → Proposal → Decision', 'FIXTURE DATA', width, ANSI.zinc, ANSI.yellow));
     lines.push('');
 
     if (state.evolveStage === 'sample-result') {
-        lines.push(`${label('ENGINE')} ${paint(ANSI.yellow, 'SAMPLE RESULT · PRECOMPUTED FIXTURE')}`);
+        lines.push(identified('sample-result', `${label('ENGINE')} ${paint(ANSI.yellow, 'SAMPLE RESULT · PRECOMPUTED FIXTURE')}`));
         lines.push('');
         lines.push(paint(ANSI.white, 'src/auth/logout.ts:31 — server session remains active after local logout'));
         lines.push(paint(ANSI.zinc, 'Sample finding: revoke the server session when the user signs out.'));
@@ -279,34 +351,35 @@ function evolveScreen(state: DemoState, width: number): string[] {
     } else if (state.evolveStage === 'feedback') {
         lines.push(`${paint(ANSI.orange, 'F')} ${paint(ANSI.white, 'WHAT DID THIS FLOW MISS?')}`);
         lines.push('');
-        lines.push(`${paint(ANSI.orange, '>')} ${paint(
-            state.feedbackText ? ANSI.white : ANSI.dim,
-            state.feedbackText || 'Describe the observed miss…',
-        )}`);
+        const feedback = presentationText(state, 'feedbackText', state.feedbackText);
+        lines.push(identified('feedback-input', `${paint(ANSI.orange, '>')} ${paint(
+            feedback ? ANSI.white : ANSI.dim,
+            feedback || 'Describe the observed miss…',
+        )}${textCaret(state, 'feedbackText', state.feedbackEdited, reducedMotion)}`));
         lines.push('');
-        lines.push(`${label('LOCAL WRITE')} Enter save feedback to the evidence ledger`);
+        lines.push(identified('write-gate', `${label('LOCAL WRITE')} Enter save feedback to the evidence ledger`));
         lines.push(paint(ANSI.yellow, 'Feedback is evidence about a miss, not proof of a fix.'));
     } else if (state.evolveStage === 'feedback-saved') {
-        lines.push(`${paint(ANSI.green, 'EVIDENCE SAVED · DEMO STATE')} ${label('LOCAL WRITE')}`);
+        lines.push(identified('feedback-input', `${paint(ANSI.green, 'EVIDENCE SAVED · DEMO STATE')} ${label('LOCAL WRITE')}`));
         lines.push('');
         lines.push(paint(ANSI.white, `${EVOLUTION_FIXTURE.feedbackId} · “${state.feedbackText || EVOLUTION_FIXTURE.feedback}”`));
         lines.push(paint(ANSI.yellow, 'Browser memory only. P can inspect readiness without an engine.'));
     } else if (state.evolveStage === 'plan') {
-        lines.push(`${paint(ANSI.orange, 'P')} ${paint(ANSI.white, 'READINESS PLAN')}  ${label('FREE')}`);
+        lines.push(identified('plan', `${paint(ANSI.orange, 'P')} ${paint(ANSI.white, 'READINESS PLAN')}  ${label('FREE')}`));
         lines.push(rule(width));
         lines.push(paint(ANSI.white, '1 open feedback · 1 linked eval case'));
         lines.push(paint(ANSI.zinc, 'Would compare current and candidate with 2 paid invocations.'));
         lines.push(paint(ANSI.green, 'No engine invoked. No source write.'));
         lines.push(paint(ANSI.yellow, 'A cost/readiness plan is not a verification result.'));
     } else if (state.evolveStage === 'proposal') {
-        lines.push(`${paint(ANSI.orange, 'O')} ${paint(ANSI.white, 'SAMPLE PROPOSAL RECORD')}  ${label('ENGINE')}`);
+        lines.push(identified('proposal', `${paint(ANSI.orange, 'O')} ${paint(ANSI.white, 'SAMPLE PROPOSAL RECORD')}  ${label('ENGINE')}`));
         lines.push(rule(width));
         lines.push(paint(ANSI.white, `${EVOLUTION_FIXTURE.proposalId} · fixture status: verified_improvement`));
         lines.push(paint(ANSI.zinc, `Current ${EVOLUTION_FIXTURE.currentScore} → candidate ${EVOLUTION_FIXTURE.candidateScore}`));
         lines.push(paint(ANSI.yellow, 'Precomputed mock data. This browser did not run or verify the proposal.'));
         lines.push(paint(ANSI.white, 'Review the diff before making a separate apply decision.'));
     } else if (state.evolveStage === 'diff') {
-        lines.push(paint(ANSI.white, `PROPOSAL DIFF · ${EVOLUTION_FIXTURE.proposalId} · FIXTURE`));
+        lines.push(identified('diff', paint(ANSI.white, `PROPOSAL DIFF · ${EVOLUTION_FIXTURE.proposalId} · FIXTURE`)));
         lines.push(rule(width));
         for (const line of EVOLUTION_FIXTURE.diff) {
             lines.push(paint(line.startsWith('+') ? ANSI.green : ANSI.red, line));
@@ -315,22 +388,22 @@ function evolveScreen(state: DemoState, width: number): string[] {
         lines.push(paint(ANSI.zinc, `Receipt fixture: current ${EVOLUTION_FIXTURE.currentScore} · candidate ${EVOLUTION_FIXTURE.candidateScore}`));
         lines.push(paint(ANSI.yellow, 'Status was loaded from fixture data, not produced in this browser.'));
     } else if (state.evolveStage === 'decision') {
-        lines.push(`${paint(ANSI.white, 'DECISION BOUNDARY')}  ${label('LOCAL WRITE')}`);
+        lines.push(identified('decision', `${paint(ANSI.white, 'DECISION BOUNDARY')}  ${label('LOCAL WRITE')}`));
         lines.push(rule(width));
         lines.push(paint(ANSI.white, `Reviewed sample proposal: ${EVOLUTION_FIXTURE.proposalId}`));
         lines.push(paint(ANSI.zinc, 'Real apply validates the source hash and writes atomically.'));
         lines.push(paint(ANSI.yellow, 'Autoplay never presses A, confirms, applies, or rolls back.'));
         lines.push('');
-        lines.push(`${paint(ANSI.blue, 'A')} open apply confirmation`);
+        lines.push(identified('write-gate', `${paint(ANSI.blue, 'A')} open apply confirmation`));
         lines.push(paint(ANSI.dim, 'R becomes available only after an explicit apply'));
     } else if (state.evolveStage === 'applied') {
-        lines.push(`${paint(ANSI.green, 'APPLIED · DEMO STATE ONLY')} ${label('LOCAL WRITE')}`);
+        lines.push(identified('confirmation', `${paint(ANSI.green, 'APPLIED · DEMO STATE ONLY')} ${label('LOCAL WRITE')}`));
         lines.push('');
         lines.push(paint(ANSI.white, `${EVOLUTION_FIXTURE.proposalId} is marked applied in browser memory.`));
         lines.push(paint(ANSI.zinc, 'No source file changed.'));
-        lines.push(`${paint(ANSI.blue, 'R')} open rollback confirmation`);
+        lines.push(identified('write-gate', `${paint(ANSI.blue, 'R')} open rollback confirmation`));
     } else {
-        lines.push(`${paint(ANSI.green, 'ROLLED BACK · DEMO STATE ONLY')} ${label('LOCAL WRITE')}`);
+        lines.push(identified('confirmation', `${paint(ANSI.green, 'ROLLED BACK · DEMO STATE ONLY')} ${label('LOCAL WRITE')}`));
         lines.push('');
         lines.push(paint(ANSI.white, 'The in-memory fixture returned to its pre-apply state.'));
         lines.push(paint(ANSI.zinc, 'No source file changed.'));
@@ -341,8 +414,8 @@ function evolveScreen(state: DemoState, width: number): string[] {
     return lines;
 }
 
-function personalFlowScreen(state: DemoState, width: number): string[] {
-    const lines = header('personal flow', width);
+function personalFlowScreen(state: DemoState, width: number, reducedMotion: boolean): ScreenLine[] {
+    const lines = screenLines(...header('personal flow', width));
     lines.push(sides(PROJECT_FIXTURE.cwd, '~/.mdflow · AVAILABLE ACROSS PROJECTS', width, ANSI.zinc, ANSI.cyan));
     lines.push('');
 
@@ -354,16 +427,21 @@ function personalFlowScreen(state: DemoState, width: number): string[] {
         lines.push(`${paint(ANSI.zinc, '$')} cd ${PROJECT_FIXTURE.otherCwd}`);
         lines.push(`${paint(ANSI.zinc, '$')} md ${slug} --_dry-run`);
         lines.push('');
-        lines.push(`${label('FREE')} ${paint(ANSI.white, `Resolved: ~/.mdflow/${slug}.md`)}`);
+        lines.push(identified('personal-resolution', `${label('FREE')} ${paint(ANSI.white, `Resolved: ~/.mdflow/${slug}.md`)}`));
         lines.push(paint(ANSI.green, 'No engine invoked; inline commands would be skipped.'));
         lines.push(paint(ANSI.zinc, `A project flows/${slug}.md would shadow the personal flow.`));
         lines.push(paint(ANSI.yellow, 'Resolution proves the command plan, not behavioral quality.'));
         return lines;
     }
 
-    lines.push(`${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create --global')}`);
+    lines.push(identified('shell-command', `${paint(ANSI.zinc, '$')} ${paint(ANSI.white, 'md create --global')}`));
     if (state.personalStage !== 'command') {
-        lines.push(promptLine(state.personalIntent, 'Describe a general-use outcome'));
+        const intent = presentationText(state, 'personalIntent', state.personalIntent);
+        lines.push(identified('intent-input', promptLine(
+            intent,
+            'Describe a general-use outcome',
+            textCaret(state, 'personalIntent', state.personalIntentEdited, reducedMotion),
+        )));
     }
     lines.push('');
     if (state.personalStage === 'command') {
@@ -376,7 +454,7 @@ function personalFlowScreen(state: DemoState, width: number): string[] {
         const slug = slugifyIntent(state.personalIntent || 'new flow');
         lines.push(paint(ANSI.zinc, `Target after Enter: ~/.mdflow/${slug}.md`));
         lines.push(paint(ANSI.zinc, 'Direct personal Markdown file; not a registry install.'));
-        lines.push(`${label('LOCAL WRITE')} ${paint(ANSI.white, 'Enter create personal flow')}`);
+        lines.push(identified('write-gate', `${label('LOCAL WRITE')} ${paint(ANSI.white, 'Enter create personal flow')}`));
         if (state.personalStage === 'enter-boundary') {
             lines.push(paint(ANSI.yellow, 'Autoplay stopped before Enter. No personal file has been created.'));
         }
@@ -390,11 +468,27 @@ export function filterDemoFlows(flows: readonly DemoFlow[], query: string): Demo
     return flows.filter((flow) => `${flow.slug} ${flow.description}`.toLowerCase().includes(needle));
 }
 
-function acceptsText(state: DemoState): boolean {
-    return (state.storyId === 'quick-create' && ['question', 'answer', 'enter-boundary'].includes(state.quickStage))
-        || (state.storyId === 'personal-flows' && ['question', 'answer', 'enter-boundary'].includes(state.personalStage))
-        || (state.storyId === 'evolve-safely' && state.evolveStage === 'feedback')
-        || state.confirmAction !== null;
+export function screenLinesFor(
+    state: DemoState,
+    cols = 92,
+    reducedMotion = false,
+): ScreenLine[] {
+    const width = Math.max(38, Math.min(cols || 92, 110));
+    const contentWidth = width - 2;
+    if (state.storyId === 'project-setup') return projectSetupScreen(state, contentWidth, reducedMotion);
+    if (state.storyId === 'quick-create') return quickCreateScreen(state, contentWidth, reducedMotion);
+    if (state.storyId === 'personal-flows') return personalFlowScreen(state, contentWidth, reducedMotion);
+    return evolveScreen(state, contentWidth, reducedMotion);
+}
+
+/** Used by compiler and renderer tests to reject focus targets with no visible row. */
+export function screenHasFocusTarget(
+    state: DemoState,
+    target: FocusTarget,
+    cols = 92,
+    reducedMotion = false,
+): boolean {
+    return screenLinesFor(state, cols, reducedMotion).some((line) => line.id === target);
 }
 
 export function terminalScreen(
@@ -405,14 +499,18 @@ export function terminalScreen(
     reducedMotion: boolean,
 ): string {
     const width = Math.max(38, Math.min(cols || 92, 110));
-    let lines: string[];
-    if (state.storyId === 'project-setup') lines = projectSetupScreen(state, width);
-    else if (state.storyId === 'quick-create') lines = quickCreateScreen(state, width);
-    else if (state.storyId === 'personal-flows') lines = personalFlowScreen(state, width);
-    else lines = evolveScreen(state, width);
+    const contentWidth = width - 2;
+    const lines = screenLinesFor(state, width, reducedMotion);
+    const focus = presentationOf(state).focus;
+    const focusIndex = focus === null ? -1 : lines.findIndex((line) => line.id === focus);
+    const rendered = lines.map((line, index) => {
+        const gutter = index === focusIndex ? paint(ANSI.orange, '▎ ') : '  ';
+        return `${gutter}${clipAnsi(line.content, contentWidth)}`;
+    });
 
-    const cursor = acceptsText(state) && !reducedMotion ? ANSI.cursorOn : ANSI.cursorOff;
-    return `${ANSI.clear}${cursor}${lines.map((line) => clipAnsi(line, width)).join('\r\n')}`;
+    // A painted caret carries the simulation. The actual wterm cursor is
+    // always hidden so focus remains deterministic across browsers.
+    return `${ANSI.clear}${ANSI.cursorOff}${rendered.join('\r\n')}`;
 }
 
 /** Useful for component copy and regression tests without duplicating shell quoting. */
