@@ -1,3 +1,10 @@
+## [4.3.1](https://github.com/johnlindquist/mdflow/compare/v4.3.0...v4.3.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **cli:** read stdin lazily so unreferenced stdin can't hang headless runs ([81feedd](https://github.com/johnlindquist/mdflow/commit/81feedd46ae38269f4b731afefda53b96f63dc66))
+
 # [4.3.0](https://github.com/johnlindquist/mdflow/compare/v4.2.0...v4.3.0) (2026-07-09)
 
 
