@@ -335,9 +335,11 @@ function hashFlowGraph(
       frontmatterValue: (parseFrontmatter(content).frontmatter as Record<string, unknown>)?.["_hooks"],
     });
     if (hooksResolved.kind === "file" && !hooksResolved.missing && !hooksResolved.rejected) {
-      pieces.push(
-        `${logicalPath(graphRoot, canonicalFlowPath(hooksResolved.path))}:${sha256(readFileSync(hooksResolved.path))}`
-      );
+      // Walk the hook program's local import graph, not just its entry file:
+      // a hook that imports a project helper changes behavior when that
+      // helper changes, so the receipt must invalidate too. Hook files are
+      // dependency-free by convention, so this usually hashes one file.
+      pieces.push(hashLocalModuleGraph(hooksResolved.path, seen, graphRoot));
     }
   } catch {
     // Unparseable frontmatter: the flow hash above already covers the bytes.

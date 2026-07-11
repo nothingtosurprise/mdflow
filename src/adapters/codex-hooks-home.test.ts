@@ -117,3 +117,32 @@ describe("re-audit regressions", () => {
     expect(readFileSync(join(prepared, "auth.json"), "utf8")).toBe('{"token":"rotated"}');
   });
 });
+
+describe("concurrency (fusion-max should-fix #2)", () => {
+  it("parallel preparations leave a complete config.toml and a valid auth link", async () => {
+    writeFileSync(join(source, "auth.json"), '{"token":"real"}');
+    writeFileSync(
+      join(source, "config.toml"),
+      '[projects."/p"]\ntrust_level = "trusted"\n'
+    );
+    await Promise.all(
+      Array.from({ length: 12 }, () =>
+        Promise.resolve().then(() =>
+          prepareCodexHooksHome({ sourceHome: source, preparedHome: prepared })
+        )
+      )
+    );
+    // No torn writes: config is exactly the trusted-projects projection, and
+    // auth is a single valid symlink to the source.
+    expect(readFileSync(join(prepared, "config.toml"), "utf8")).toBe(
+      '[projects."/p"]\ntrust_level = "trusted"\n'
+    );
+    expect(lstatSync(join(prepared, "auth.json")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(prepared, "auth.json"))).toBe(join(source, "auth.json"));
+    // No stray temp files left behind.
+    const leftovers = require("node:fs")
+      .readdirSync(prepared)
+      .filter((n: string) => n.includes(".tmp."));
+    expect(leftovers).toEqual([]);
+  });
+});

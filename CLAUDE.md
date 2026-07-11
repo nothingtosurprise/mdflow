@@ -280,10 +280,17 @@ see the probe evidence rules below before changing any of this):
 - `codex exec` fires SessionStart, UserPromptSubmit, PreToolUse,
   PostToolUse, Stop; SessionEnd never fires. Hook cwd = session cwd; stdin
   payload carries `hook_event_name` (PascalCase), `session_id`, `cwd`, etc.
-- EXECUTION-time hook failures fail OPEN (codex continues the run), but
-  DISCOVERY failures fail the run loudly (missing/rejected/uninspectable
-  hooks file). UserPromptSubmit can block via exit 2 or
-  `{"decision":"block"}`; Stop can force continuation.
+- EXECUTION-time hook failures fail OPEN by default (codex continues), but
+  the scaffolded dispatcher fails CLOSED for GUARD events — if a
+  `userPromptSubmit`/`preToolUse`/`permissionRequest` handler THROWS, it
+  emits the engine's block/deny response rather than letting the guarded
+  action through (observational events like `stop` stay open — blocking
+  Stop on error would loop). DISCOVERY failures always fail the run loudly
+  (missing/rejected/uninspectable hooks file). UserPromptSubmit can block
+  via exit 2 or `{"decision":"block"}`; Stop can force continuation.
+- The prepared codex home is a SHARED dir; every write into it (auth
+  symlink, config.toml) is atomic (temp + rename) so concurrent mdflow
+  processes never see a torn file.
 Engines with no verified hook mechanism FAIL a run whose hooks file exists
 (same policy as `_system-prompt`); `_hooks: false` opts out. Never add an
 engine translation from guessed config — verify against the engine's own

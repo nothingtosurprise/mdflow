@@ -25,6 +25,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -123,25 +124,44 @@ export function prepareCodexHooksHome(
   }
   if (selfReferential) return prepared;
 
+  // Concurrency: several mdflow processes may prepare this SHARED home at
+  // once, and a codex child may be reading it meanwhile. Every mutation is
+  // therefore atomic (rename over the target) so a reader only ever sees a
+  // complete auth link and a complete config.toml. Concurrent preparers
+  // write byte-identical content (same source), so last-writer-wins is safe.
+  const uniqueSuffix = `.tmp.${process.pid}.${prepareCounter++}`;
+
   const authSrc = join(source, "auth.json");
   const authDst = join(prepared, "auth.json");
   // A REGULAR auth.json in the prepared home is kept as-is: codex may
   // rotate credentials by atomically replacing the file, and that rotated
-  // token is fresher than the source copy. Only (re)point symlinks.
+  // token is fresher than the source copy. Only (re)establish symlinks.
   let dstIsLink = false;
+  let dstExists = true;
   try {
     dstIsLink = lstatSync(authDst).isSymbolicLink();
-  } catch {}
-  if (dstIsLink) unlinkSync(authDst);
-  if (existsSync(authSrc) && !existsSync(authDst)) {
-    symlinkSync(authSrc, authDst);
+  } catch {
+    dstExists = false;
+  }
+  if ((dstIsLink || !dstExists) && existsSync(authSrc)) {
+    const tmpLink = join(prepared, `auth.json${uniqueSuffix}`);
+    try {
+      symlinkSync(authSrc, tmpLink);
+      renameSync(tmpLink, authDst); // atomic replace of any existing symlink
+    } catch {
+      try { unlinkSync(tmpLink); } catch {}
+    }
   }
 
   const configSrc = join(source, "config.toml");
   const trusted = existsSync(configSrc)
     ? trustedProjectsConfig(readFileSync(configSrc, "utf8"))
     : "";
-  writeFileSync(join(prepared, "config.toml"), trusted, "utf8");
+  const tmpConfig = join(prepared, `config.toml${uniqueSuffix}`);
+  writeFileSync(tmpConfig, trusted, "utf8");
+  renameSync(tmpConfig, join(prepared, "config.toml")); // atomic publish
 
   return prepared;
 }
+
+let prepareCounter = 0;

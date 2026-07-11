@@ -532,6 +532,7 @@ function proposalLine(status: WorkbenchFlowStatus): string {
 
 function hooksLine(status: WorkbenchHooksStatus): string {
   if (status.state === "none") return color.dim("no hooks");
+  if (status.state === "disabled") return color.dim("hooks disabled (_hooks: false)");
   if (status.state === "loading") return color.dim("loading events…");
   if (status.state === "error") return color.yellow("file found · unable to list events");
   const count = status.events.length;
@@ -714,17 +715,19 @@ function flowActionRows(
     ?? (status.proposal?.state === "applied" ? proposalRunId : undefined);
   const hooksAction: FlowActionRow = hooks.state === "none"
     ? { action: "hooks-add", label: "Add hooks", effect: "LOCAL WRITE", enabled: true }
-    : {
-        action: "hooks-open",
-        label: hooks.state === "ready"
-          ? `Open hooks file (${hooks.events.length} event${hooks.events.length === 1 ? "" : "s"})`
-          : hooks.state === "loading"
-            ? "Open hooks file (loading events…)"
-            : "Open hooks file (events unavailable)",
-        effect: "LOCAL WRITE",
-        enabled: true,
-        hooksPath: hooks.path,
-      };
+    : hooks.state === "disabled"
+      ? { action: "hooks-add", label: "Add hooks (currently disabled by _hooks: false)", effect: "LOCAL WRITE", enabled: false }
+      : {
+          action: "hooks-open",
+          label: hooks.state === "ready"
+            ? `Open hooks file (${hooks.events.length} event${hooks.events.length === 1 ? "" : "s"})`
+            : hooks.state === "loading"
+              ? "Open hooks file (loading events…)"
+              : "Open hooks file (events unavailable)",
+          effect: "LOCAL WRITE",
+          enabled: true,
+          hooksPath: hooks.path,
+        };
   return [
     { action: "run", label: "Run flow", effect: "ENGINE", enabled: true },
     { action: "dry-run", label: "Preview dry-run", effect: "FREE", enabled: true },

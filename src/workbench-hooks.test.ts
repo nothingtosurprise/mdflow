@@ -85,3 +85,37 @@ describe("Workbench hooks hydration", () => {
     expect(calls).toBe(1);
   });
 });
+
+describe("Workbench hooks consent + frontmatter (fusion-max #5, #6)", () => {
+  test("hydration uses the static lister — a booby-trapped hooks file never executes", async () => {
+    const path = join(directory, "review.codex.md");
+    writeFileSync(path, "# Review\n");
+    const sentinel = join(directory, "executed.txt");
+    // A valid template shape (so static parse finds events) whose top-level
+    // code WOULD write a sentinel if the file were ever executed.
+    writeFileSync(
+      join(directory, "review.codex.hooks.ts"),
+      `#!/usr/bin/env bun\nawait Bun.write(${JSON.stringify(sentinel)}, "x");\n` +
+        "type HookHandler = (p: unknown) => unknown;\n" +
+        "const handlers: Record<string, HookHandler> = {\n  stop: async (_p) => {\n  },\n};\n",
+      { mode: 0o755 }
+    );
+    const file: AgentFile = { name: "review.codex.md", path, source: "flows" };
+    const initial = getWorkbenchHooksStatus(file);
+    expect(initial.state).toBe("loading");
+    const hydrated = await hydrateWorkbenchHooksStatus(file);
+    expect(hydrated).toMatchObject({ state: "ready", events: ["stop"] });
+    expect(require("node:fs").existsSync(sentinel)).toBe(false);
+  });
+
+  test("reports _hooks: false as disabled, not as a hook file", () => {
+    const path = join(directory, "review.codex.md");
+    writeFileSync(path, "---\n_hooks: false\n---\n# Review\n");
+    writeFileSync(
+      join(directory, "review.codex.hooks.ts"),
+      "const handlers: Record<string, unknown> = {\n  stop: async () => {\n  },\n};\n"
+    );
+    const file: AgentFile = { name: "review.codex.md", path, source: "flows" };
+    expect(getWorkbenchHooksStatus(file)).toEqual({ state: "disabled" });
+  });
+});

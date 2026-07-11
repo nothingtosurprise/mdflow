@@ -383,10 +383,49 @@ describe("renderHooksTemplate", () => {
     expect(template).toContain(
       "type HookResult = void | string | Record<string, unknown>;"
     );
-    expect(template.match(/^  stop:/gm)).toHaveLength(1);
-    expect(template).toContain("  sessionStart:");
-    expect(template).not.toContain("  preToolUse:");
+    // Handlers render as `<event>: async (...)`; the fail-closed guard map
+    // that always follows uses `<event>: (reason) =>`, so match on `async`
+    // to test the handler set specifically.
+    expect(template.match(/^  stop: async/gm)).toHaveLength(1);
+    expect(template).toContain("  sessionStart: async");
+    expect(template).not.toMatch(/^  preToolUse: async/m);
     expect(template).toContain('{ decision: "block", reason: "…" }');
+  });
+
+  it("fails closed for guard events whose handler throws, open otherwise", async () => {
+    const template = renderHooksTemplate([
+      "userPromptSubmit",
+      "preToolUse",
+      "postToolUse",
+    ]);
+    const boom = 'const x = null; (x as any).nope();';
+    const source = template
+      .replace(
+        'userPromptSubmit: async (_payload: HookPayload): Promise<HookResult> => {',
+        `userPromptSubmit: async (_payload: HookPayload): Promise<HookResult> => { ${boom}`
+      )
+      .replace(
+        'preToolUse: async (_payload: HookPayload): Promise<HookResult> => {',
+        `preToolUse: async (_payload: HookPayload): Promise<HookResult> => { ${boom}`
+      )
+      .replace(
+        'postToolUse: async (_payload: HookPayload): Promise<HookResult> => {',
+        `postToolUse: async (_payload: HookPayload): Promise<HookResult> => { ${boom}`
+      );
+    const hooksPath = writeExecutable("throwing.hooks.ts", source);
+
+    const ups = await runExecutable(hooksPath, { stdin: hookPayload("user_prompt_submit") });
+    expect(ups.exitCode).toBe(0);
+    expect(JSON.parse(ups.stdout)).toMatchObject({ decision: "block" });
+
+    const pre = await runExecutable(hooksPath, { stdin: hookPayload("pre_tool_use") });
+    expect(pre.exitCode).toBe(0);
+    expect(JSON.parse(pre.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+
+    // Observational event: a throw fails open (empty stdout, no block).
+    const post = await runExecutable(hooksPath, { stdin: hookPayload("post_tool_use") });
+    expect(post.exitCode).toBe(0);
+    expect(post.stdout).toBe("");
   });
 
   it("runs listing, string, object, void, unknown, and malformed-input protocols", async () => {

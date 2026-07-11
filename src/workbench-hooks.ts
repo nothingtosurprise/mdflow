@@ -7,8 +7,9 @@
  * cached by hooks path + mtime and are therefore reused until the file changes.
  */
 
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import type { AgentFile } from "./cli";
+import { parseRawFrontmatter } from "./parse";
 import {
   listHandledEventsStatic,
   resolveHooksFile,
@@ -17,9 +18,22 @@ import {
 
 export type WorkbenchHooksStatus =
   | { state: "none" }
+  | { state: "disabled" }
   | { state: "loading"; path: string; mtimeMs: number }
   | { state: "ready"; path: string; mtimeMs: number; events: CanonicalHookEvent[] }
   | { state: "error"; path: string; mtimeMs: number; error: string };
+
+/** Read the flow's `_hooks:` override so the status matches a real run. */
+function flowHooksFrontmatter(flowPath: string): unknown {
+  try {
+    const fm = parseRawFrontmatter(readFileSync(flowPath, "utf8")).frontmatter as
+      | Record<string, unknown>
+      | null;
+    return fm?.["_hooks"];
+  } catch {
+    return undefined;
+  }
+}
 
 type HydratedHooksStatus = Extract<WorkbenchHooksStatus, { state: "ready" | "error" }>;
 
@@ -36,8 +50,14 @@ type ListEvents = (
 ) => Promise<{ ok: true; events: CanonicalHookEvent[] } | { ok: false; error: string }>;
 
 export function getWorkbenchHooksStatus(file: AgentFile): WorkbenchHooksStatus {
-  const resolved = resolveHooksFile({ flowPath: file.path });
-  if (resolved.kind !== "file" || resolved.missing) return { state: "none" };
+  const resolved = resolveHooksFile({
+    flowPath: file.path,
+    frontmatterValue: flowHooksFrontmatter(file.path),
+  });
+  if (resolved.kind === "disabled") return { state: "disabled" };
+  if (resolved.kind !== "file" || resolved.missing || resolved.rejected) {
+    return { state: "none" };
+  }
 
   try {
     const mtimeMs = statSync(resolved.path).mtimeMs;

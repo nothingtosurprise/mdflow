@@ -10,7 +10,7 @@
  * - Configuration precedence applied
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "path";
 import { parseFrontmatter } from "./parse";
@@ -563,7 +563,10 @@ export async function explainJsonFromResult(
   if (result.systemPrompt?.error) warnings.push(result.systemPrompt.error);
   if (result.hooks?.error) warnings.push(result.hooks.error);
 
-  // Fingerprint: resolved config + flow content + mdflow version.
+  // Fingerprint: resolved config + flow content + hook bytes + mdflow
+  // version. Hooks are included because a changed hook file (same path)
+  // changes the events explain/render display and the -c override the flow
+  // would run with — a cache keyed on this must therefore invalidate.
   const fullConfig = await loadFullConfig(cwd);
   let flowContent = "";
   try {
@@ -571,13 +574,21 @@ export async function explainJsonFromResult(
   } catch {
     // Remote flows were cleaned up after analysis; hash without content.
   }
-  const fingerprint = createHash("sha256")
+  const hasher = createHash("sha256")
     .update(JSON.stringify(fullConfig))
     .update("\0")
     .update(flowContent)
     .update("\0")
-    .update(mdflowVersion())
-    .digest("hex");
+    .update(mdflowVersion());
+  if (result.hooks && !result.hooks.error) {
+    try {
+      hasher.update("\0hooks\0").update(readFileSync(result.hooks.file, "utf8"));
+    } catch {
+      // Hook file vanished between analysis and hashing: config-level cache
+      // key still reflects the flow; a real run would fail loudly.
+    }
+  }
+  const fingerprint = hasher.digest("hex");
 
   return {
     protocolVersion: FLOW_UX_PROTOCOL_VERSION,
