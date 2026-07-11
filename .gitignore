@@ -52,3 +52,8 @@ mdflow-core-bundle.md
 .hitl-choice/
 .vercel
 .env*
+
+# local runtime artifacts (agent/tool session state written into the repo cwd)
+.last-cleanup
+backups/
+sessions/
