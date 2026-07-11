@@ -200,3 +200,21 @@ describe("mdflowVersion", () => {
     expect(parseVersion(mdflowVersion())).not.toBeNull();
   });
 });
+
+describe("stamping never corrupts exotic-but-valid frontmatter", () => {
+  it("skips _compat stamping on flow-mapping ({}) frontmatter instead of corrupting it", () => {
+    const content = "---\n{}\n---\nBody.\n";
+    expect(applyCompatStamp(content, "9.9.9")).toBeNull();
+  });
+
+  it("skips created-version stamping on flow-mapping frontmatter", () => {
+    const content = "---\n{}\n---\nBody.\n";
+    expect(stampCreatedVersion(content, "9.9.9")).toBe(content);
+  });
+
+  it("still stamps normal block-mapping frontmatter", () => {
+    const content = "---\ndescription: t\n---\nBody.\n";
+    const next = applyCompatStamp(content, "9.9.9");
+    expect(next).toContain("_compat: 9.9.9");
+  });
+});

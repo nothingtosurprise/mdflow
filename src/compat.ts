@@ -188,9 +188,25 @@ export function stampCreatedVersion(content: string, version = mdflowVersion()):
     const { frontmatter } = parseRawFrontmatter(content);
     const fm = (frontmatter ?? {}) as Record<string, unknown>;
     if (fm["_mdflow_version"] !== undefined || fm["_compat"] !== undefined) return content;
-    return setFrontmatterKey(content, "_mdflow_version", version);
+    const next = setFrontmatterKey(content, "_mdflow_version", version);
+    return stampSurvivesReparse(next, "_mdflow_version", version) ? next : content;
   } catch {
     return content; // unparseable frontmatter — never make it worse
+  }
+}
+
+/**
+ * A stamp is only valid if the stamped file still parses AND carries the
+ * key. Line-level insertion assumes block-mapping frontmatter; a flow
+ * mapping (`{}`) or other exotic-but-valid YAML would be corrupted by an
+ * appended `key: value` line — in that case we skip stamping entirely.
+ */
+function stampSurvivesReparse(content: string, key: string, version: string): boolean {
+  try {
+    const fm = (parseRawFrontmatter(content).frontmatter ?? {}) as Record<string, unknown>;
+    return fm[key] === version;
+  } catch {
+    return false;
   }
 }
 
@@ -221,7 +237,8 @@ export function applyCompatStamp(content: string, version = mdflowVersion()): st
   }
 
   const next = setFrontmatterKey(content, "_compat", version);
-  return next === content ? null : next;
+  if (next === content) return null;
+  return stampSurvivesReparse(next, "_compat", version) ? next : null;
 }
 
 /**
