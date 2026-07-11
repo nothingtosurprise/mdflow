@@ -58,10 +58,19 @@ describe("resolveCommandStdio", () => {
       spinnerActive: false,
       interactive: false,
     })).toEqual({
-      stdin: "inherit",
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
+  });
+
+  test("print-mode engines never see the parent's stdin (codex exec would wait for EOF)", () => {
+    expect(resolveCommandStdio({
+      mode: "none",
+      captureStderr: false,
+      spinnerActive: false,
+      interactive: false,
+    }).stdin).toBe("ignore");
   });
 });
 

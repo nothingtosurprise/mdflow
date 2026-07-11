@@ -114,6 +114,10 @@ const SYSTEM_KEYS = new Set([
   "_isolated",
   "_system-prompt",
   "_append-system-prompt",
+
+  // Lifecycle hooks (v3): `_hooks` selects/disables the flow's hooks file;
+  // the adapter layer translates it into engine-native config. Never a flag.
+  "_hooks",
 ]);
 
 /**
@@ -607,7 +611,7 @@ function normalizeCaptureMode(mode: boolean | CaptureMode): CaptureMode {
 }
 
 export interface CommandStdioPolicy {
-  stdin: "inherit";
+  stdin: "inherit" | "ignore";
   stdout: "inherit" | "pipe";
   stderr: "inherit" | "pipe";
 }
@@ -627,7 +631,12 @@ export function resolveCommandStdio(options: {
   const shouldPipeStdout = capturing || options.spinnerActive;
   const shouldPipeStderr = capturing && options.captureStderr;
   return {
-    stdin: "inherit",
+    // Print-mode engines never read the parent's stdin: piped input is
+    // consumed by mdflow itself and delivered via {{ _stdin }}. Passing an
+    // open stdin through makes engines that poll it (codex exec prints
+    // "Reading additional input from stdin..." and waits for EOF) hang
+    // headless runs until the parent's stdin closes.
+    stdin: "ignore",
     stdout: shouldPipeStdout ? "pipe" : "inherit",
     stderr: shouldPipeStderr ? "pipe" : "inherit",
   };
