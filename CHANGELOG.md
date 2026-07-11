@@ -1,3 +1,15 @@
+# [4.5.0](https://github.com/johnlindquist/mdflow/compare/v4.4.0...v4.5.0) (2026-07-11)
+
+
+### Bug Fixes
+
+* **hooks:** fail-closed guard handlers, atomic prepared home, hook bytes in fingerprints ([17593a2](https://github.com/johnlindquist/mdflow/commit/17593a2b589c8a31371433b1d8bab05f4a57c3d7))
+
+
+### Features
+
+* **hooks:** support the claude engine ([4dc9ec2](https://github.com/johnlindquist/mdflow/commit/4dc9ec2daf4573f0f2f98b73b28dba06b87bc5d3))
+
 # [4.4.0](https://github.com/johnlindquist/mdflow/compare/v4.3.1...v4.4.0) (2026-07-11)
 
 
