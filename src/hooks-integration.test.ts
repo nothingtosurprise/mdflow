@@ -300,3 +300,37 @@ describe("re-audit regressions", () => {
     expect(existsSync(join(fakeHome, ".mdflow", "codex-hooks-home"))).toBe(false);
   });
 });
+
+describe("claude engine hooks", () => {
+  function writeClaudeFlow(name = "task.claude.md", extraFm = ""): string {
+    writeFileSync(join(dir, name), `---\ndescription: t${extraFm ? "\n" + extraFm : ""}\n---\nSay ok.\n`);
+    return name;
+  }
+
+  it("injects inline --settings, excludes ambient sources, drops --safe-mode, discloses the tradeoff", async () => {
+    const flow = writeClaudeFlow();
+    writeHooks(["sessionStart", "stop"], "task.claude.hooks.ts");
+    const result = await runCli([flow, "--_dry-run"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--settings {"hooks":{"SessionStart":');
+    expect(result.stdout).toContain("--setting-sources");
+    expect(result.stdout).not.toContain("--safe-mode");
+    expect(result.stderr).toContain("HOOKS_ISOLATION_REDUCED");
+  });
+
+  it("hard-fails when the claude flow already supplies native settings:", async () => {
+    const flow = writeClaudeFlow("task.claude.md", "settings: ./mine.json");
+    writeHooks(["stop"], "task.claude.hooks.ts");
+    const result = await runCli([flow, "--_dry-run"]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("own the `settings` setting");
+  });
+
+  it("claude hooks require isolation", async () => {
+    const flow = writeClaudeFlow("task.claude.md", "_isolated: false");
+    writeHooks(["stop"], "task.claude.hooks.ts");
+    const result = await runCli([flow, "--_dry-run"]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("require isolation");
+  });
+});

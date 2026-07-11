@@ -480,9 +480,17 @@ const handlers: Record<string, HookHandler> = {
 
 On every run, mdflow reads which events the file handles (from its text —
 inspection never executes it) and translates them into the engine's native
-hook mechanism (codex today: an inline `-c hooks={…}` override plus a
-prepared, hooks-free codex home under `~/.mdflow/` — your own codex config
-and credentials are never modified).
+hook mechanism. **codex** and **claude** are supported today (the same hooks
+file works unchanged on both — its dispatcher normalizes event names):
+
+- **codex** — an inline `-c hooks={…}` override plus a prepared, hooks-free
+  codex home under `~/.mdflow/`, so your own codex config and credentials
+  are never modified.
+- **claude** — an inline `--settings` blob plus `--setting-sources ""` to
+  exclude your ambient settings hooks. Claude's `--safe-mode` disables
+  injected hooks, so a hooked claude run drops it and prints a one-line
+  disclosure that CLAUDE.md/skills/plugins/MCP are no longer isolated for
+  that run (your ambient settings hooks still are).
 Debug a hook standalone by piping a payload to it:
 
 ```bash
@@ -491,22 +499,28 @@ echo '{"hook_event_name":"Stop"}' | ./review.codex.hooks.ts
 
 Events: `sessionStart`, `userPromptSubmit`, `preToolUse`, `postToolUse`,
 `permissionRequest`, `preCompact`, `postCompact`, `subagentStart`,
-`subagentStop`, `stop`, `sessionEnd`. In `codex exec` (print mode), codex
-fires `sessionStart`, `userPromptSubmit`, `preToolUse`, `postToolUse`, and
-`stop`. Once a run is underway, a hook that crashes or times out fails open
-— codex continues. Discovery problems are the opposite: a hooks file that
-exists but can't be used (missing, uninspectable, escaping path) fails the
-run loudly, because silently dropping declared hooks would change the flow.
+`subagentStop`, `stop`, `sessionEnd`. In print mode, codex fires
+`sessionStart`/`userPromptSubmit`/`preToolUse`/`postToolUse`/`stop`, and
+claude additionally fires `sessionEnd`; the rest are registered but
+scenario-dependent. Once a run is underway, a hook that crashes or times out
+fails open (the engine continues) — except that the scaffolded dispatcher
+fails **closed** for guard events (`userPromptSubmit`, `preToolUse`,
+`permissionRequest`): if one of those handlers throws, mdflow emits the
+engine's block/deny response rather than letting the guarded action through.
+Discovery problems are the opposite: a hooks file that exists but can't be
+used (missing, uninspectable, escaping path) fails the run loudly, because
+silently dropping declared hooks would change the flow.
 
 Consent and containment rules:
 
 - **Inspection never executes.** `md explain`, `md hooks list`, dry runs,
   and the Workbench read the handlers map from the file's text; only a real
   run may execute the hook program (it's about to run anyway).
-- **Hooks run isolated.** On codex, hooked runs use a prepared, hooks-free
-  codex home so mdflow's trust bypass can never enable ambient hooks you
-  haven't reviewed; `_isolated: false` combined with a hooks file is an
-  error.
+- **Hooks run isolated.** Hooked runs exclude your ambient hooks so mdflow's
+  injected hooks are the only ones that fire — on codex via a prepared,
+  hooks-free codex home (its trust bypass can never enable hooks you haven't
+  reviewed), on claude via `--setting-sources ""`. `_isolated: false`
+  combined with a hooks file is an error on both.
 - **Paths are contained.** A flow's `_hooks:` may only point inside the
   flow's own directory, and remote flows can't declare `_hooks` paths at
   all. Only `--_hooks` typed on the command line escapes containment.

@@ -74,9 +74,15 @@ describe("md hooks add", () => {
   });
 
   it("warns about engines with no hook mechanism", async () => {
+    writeFileSync(join(dir, "task.droid.md"), "---\ndescription: t\n---\nhi\n");
+    expect(await runHooksCli(["add", "task.droid.md", "stop"], runtime())).toBe(0);
+    expect(out.join("\n")).toContain('engine "droid" has no verified hook mechanism');
+  });
+
+  it("does not warn for claude (a supported hook engine)", async () => {
     writeFileSync(join(dir, "task.claude.md"), "---\ndescription: t\n---\nhi\n");
     expect(await runHooksCli(["add", "task.claude.md", "stop"], runtime())).toBe(0);
-    expect(out.join("\n")).toContain('engine "claude" has no verified hook mechanism');
+    expect(out.join("\n")).not.toContain("has no verified hook mechanism");
   });
 
   it("dedupes events and reports no-op when already handled", async () => {

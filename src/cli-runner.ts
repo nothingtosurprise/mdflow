@@ -2235,16 +2235,20 @@ export class CliRunner {
         if (!listed.ok) {
           throw new ConfigurationError(`Hooks error: ${listed.error}`, 1);
         }
-        frontmatter = applyHooksToFrontmatter(engineAdapter, command, frontmatter, {
+        const appliedHooks = applyHooksToFrontmatter(engineAdapter, command, frontmatter, {
           hooksFile: resolve(resolvedHooks.path),
           events: listed.events,
           isolated: isolationMode.isolated,
           // Dry runs are passive: show the real env, prepare nothing.
           prepareEnvironment: !parsed.dryRun,
         });
+        frontmatter = appliedHooks.frontmatter;
         if (!parsed.quiet && !jsonMode) {
           const dim = process.stderr.isTTY ? ["\x1b[2m", "\x1b[0m"] : ["", ""];
           this.writeStderr(`${dim[0]}${formatHooksStderrLine(resolvedHooks.path, listed.events)}${dim[1]}`);
+          for (const warning of appliedHooks.warnings) {
+            this.writeStderr(`${dim[0]}${warning}${dim[1]}`);
+          }
         }
       } else if (frontmatter._hooks !== undefined) {
         // `_hooks: false` resolved to disabled — consume the key so it never

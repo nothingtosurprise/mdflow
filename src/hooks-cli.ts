@@ -21,6 +21,7 @@ import { basename, resolve } from "node:path";
 import {
   CANONICAL_HOOK_EVENTS,
   CODEX_HOOK_EVENT_NAMES,
+  CLAUDE_HOOK_EVENT_NAMES,
   HANDLERS_OPEN_MARKER,
   hooksFileForFlow,
   listHandledEventsStatic,
@@ -109,11 +110,11 @@ async function defaultPromptConfirm(message: string): Promise<boolean> {
 function engineSupportNote(flowPath: string): string | undefined {
   const engine = parseCommandFromFilename(basename(flowPath));
   if (!engine || !hasAdapter(engine)) {
-    return `Note: this flow's filename names no known engine; hooks currently run on codex — the run fails on engines without hook support.`;
+    return `Note: this flow's filename names no known engine; hooks currently run on codex and claude — the run fails on engines without hook support.`;
   }
   const adapter = getEngineAdapter(engine);
   if (!adapter.applyHooks) {
-    return `Note: engine "${engine}" has no verified hook mechanism yet — running this flow WITH a hooks file will fail. Hooks currently work on: codex.`;
+    return `Note: engine "${engine}" has no verified hook mechanism yet — running this flow WITH a hooks file will fail. Hooks currently work on: codex, claude.`;
   }
   return undefined;
 }
@@ -206,9 +207,12 @@ export async function runHooksCli(
       return 1;
     }
     log(`Hooks file: ${resolved.path}${resolved.source === "frontmatter" ? " (from _hooks:)" : ""}`);
+    const engine = parseCommandFromFilename(basename(flowPath));
+    const eventMap = engine === "claude" ? CLAUDE_HOOK_EVENT_NAMES : CODEX_HOOK_EVENT_NAMES;
+    const engineLabel = engine === "claude" ? "claude" : "codex";
     log(`Events:`);
     for (const event of listed.events) {
-      log(`  ${event} → codex ${CODEX_HOOK_EVENT_NAMES[event]}`);
+      log(`  ${event} → ${engineLabel} ${eventMap[event]}`);
     }
     const note = engineSupportNote(flowPath);
     if (note) log(note);

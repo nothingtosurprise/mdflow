@@ -54,6 +54,27 @@ export const CODEX_HOOK_EVENT_NAMES: Record<CanonicalHookEvent, string> = {
   sessionEnd: "SessionEnd",
 };
 
+/**
+ * Canonical → Claude Code settings event names. Every value below is in the
+ * accepted-event registry of Claude Code 2.1.207 (verified via `claude
+ * doctor` in docs/claude-hooks-probe-2026-07.md). In a print-mode run,
+ * SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, and
+ * SessionEnd fire; the rest are registered but scenario-dependent.
+ */
+export const CLAUDE_HOOK_EVENT_NAMES: Record<CanonicalHookEvent, string> = {
+  sessionStart: "SessionStart",
+  userPromptSubmit: "UserPromptSubmit",
+  preToolUse: "PreToolUse",
+  postToolUse: "PostToolUse",
+  permissionRequest: "PermissionRequest",
+  preCompact: "PreCompact",
+  postCompact: "PostCompact",
+  subagentStart: "SubagentStart",
+  subagentStop: "SubagentStop",
+  stop: "Stop",
+  sessionEnd: "SessionEnd",
+};
+
 export type ResolvedHooksFile =
   | { kind: "disabled" }
   | { kind: "none" }
@@ -451,6 +472,47 @@ export function buildCodexHooksConfig(opts: {
   return { hooks };
 }
 
+export interface ClaudeHooksSettings {
+  hooks: Record<
+    string,
+    Array<{ matcher: string; hooks: Array<{ type: "command"; command: string; timeout: number }> }>
+  >;
+}
+
+/**
+ * Build Claude Code's native settings-hooks object for the given events.
+ * Shape verified on Claude Code 2.1.207: `hooks -> Event -> [{matcher, hooks:
+ * [{type, command, timeout}]}]`. `matcher: ""` matches every occurrence.
+ * The command runs through a shell, so runtime + path are shell-quoted; the
+ * whole object is later JSON-serialized into one `--settings` argv value
+ * (no shell involved at that layer, so JSON escaping is all that remains).
+ */
+export function buildClaudeHooksSettings(opts: {
+  hooksFile: string;
+  events: CanonicalHookEvent[];
+  runtime?: string;
+  timeoutSeconds?: number;
+}): ClaudeHooksSettings {
+  const runtime = opts.runtime ?? process.execPath;
+  const command =
+    `${quotePosixShellArg(runtime)} ` + quotePosixShellArg(resolve(opts.hooksFile));
+  const hooks: ClaudeHooksSettings["hooks"] = {};
+  for (const event of opts.events) {
+    hooks[CLAUDE_HOOK_EVENT_NAMES[event]] = [
+      {
+        matcher: "",
+        hooks: [{ type: "command", command, timeout: opts.timeoutSeconds ?? 60 }],
+      },
+    ];
+  }
+  return { hooks };
+}
+
+/** Serialize claude settings-hooks as one inline `--settings` argv value. */
+export function buildClaudeHooksSettingsValue(config: ClaudeHooksSettings): string {
+  return JSON.stringify(config);
+}
+
 /** Render an inert, self-contained Bun hook program for the requested events. */
 export function renderHooksTemplate(events: CanonicalHookEvent[]): string {
   const requestedEvents = [...new Set(events)];
@@ -539,6 +601,12 @@ export function formatHooksStderrLine(
   return `hooks: ${basename(hooksFile)} (${events.join(", ")})`;
 }
 
+export interface AppliedHooks {
+  frontmatter: AgentFrontmatter;
+  /** Dim disclosures to surface on stderr (e.g. claude isolation tradeoff). */
+  warnings: string[];
+}
+
 /**
  * Apply a discovered hooks file via the engine adapter. Same contract as
  * applySystemPromptToFrontmatter: engines with no applyHooks translation FAIL
@@ -550,18 +618,31 @@ export function applyHooksToFrontmatter(
   command: string,
   frontmatter: AgentFrontmatter,
   spec: HooksSpec
-): AgentFrontmatter {
+): AppliedHooks {
   if (!adapter.applyHooks) {
     throw new CommandError(
       `${command} has no verified lifecycle-hook mechanism; a hooks file ` +
         `exists for this flow (${basename(spec.hooksFile)}) but cannot run. ` +
-        `Switch the flow to an engine with hook support (codex), or set ` +
-        `\`_hooks: false\` to run without hooks.`,
+        `Switch the flow to an engine with hook support (codex, claude), or ` +
+        `set \`_hooks: false\` to run without hooks.`,
       { errorCode: "HOOKS_UNSUPPORTED", context: { command, hooksFile: spec.hooksFile } }
     );
   }
 
   const translation = adapter.applyHooks(spec);
+
+  // Ownership conflict: if the flow itself supplies a key the translation
+  // owns (e.g. claude `settings:`), fail rather than let argv order decide.
+  for (const key of translation.exclusiveKeys ?? []) {
+    if (frontmatter[key] !== undefined) {
+      throw new CommandError(
+        `${command} hooks own the \`${key}\` setting, but this flow already ` +
+          `sets \`${key}\`. Remove the flow's \`${key}\` or set \`_hooks: false\`.`,
+        { errorCode: "HOOKS_UNSUPPORTED", context: { command, key } }
+      );
+    }
+  }
+
   const result: AgentFrontmatter = { ...frontmatter };
   delete result._hooks;
 
@@ -583,5 +664,5 @@ export function applyHooksToFrontmatter(
     result._env = { ...existingEnv, ...translation.env };
   }
 
-  return result;
+  return { frontmatter: result, warnings: translation.warnings ?? [] };
 }

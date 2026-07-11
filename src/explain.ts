@@ -85,6 +85,7 @@ export interface ExplainResult {
     source: string;
     events: string[];
     error?: string;
+    warnings?: string[];
   };
 }
 
@@ -244,12 +245,14 @@ export async function analyzeAgent(
         } else {
           hooksResult.events = listed.events;
           try {
-            frontmatter = applyHooksToFrontmatter(engineAdapter, command, frontmatter, {
+            const applied = applyHooksToFrontmatter(engineAdapter, command, frontmatter, {
               hooksFile: resolve(resolvedHooks.path),
               events: listed.events,
               isolated: isolationMode.isolated,
               prepareEnvironment: false,
             });
+            frontmatter = applied.frontmatter;
+            hooksResult.warnings = applied.warnings;
           } catch (err) {
             hooksResult.error = (err as Error).message;
           }
@@ -410,6 +413,9 @@ export function formatExplainOutput(result: ExplainResult): string {
       lines.push(`ERROR: ${result.hooks.error}`);
     } else {
       lines.push(`Events: ${result.hooks.events.join(", ")}`);
+      for (const warning of result.hooks.warnings ?? []) {
+        lines.push(warning);
+      }
     }
     lines.push("");
   }
@@ -562,6 +568,7 @@ export async function explainJsonFromResult(
   if (result.isolation.warning) warnings.push(result.isolation.warning);
   if (result.systemPrompt?.error) warnings.push(result.systemPrompt.error);
   if (result.hooks?.error) warnings.push(result.hooks.error);
+  if (result.hooks?.warnings) warnings.push(...result.hooks.warnings);
 
   // Fingerprint: resolved config + flow content + hook bytes + mdflow
   // version. Hooks are included because a changed hook file (same path)

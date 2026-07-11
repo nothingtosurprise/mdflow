@@ -542,6 +542,19 @@ export interface HooksSpec {
 export interface HooksTranslation {
   frontmatter?: Record<string, FrontmatterValue>;
   env?: Record<string, string>;
+  /**
+   * Dim disclosures printed on stderr for a hooked run (e.g. claude trades
+   * `--safe-mode` context isolation for hook support). Surfacing a
+   * consequence is how mdflow avoids silently redefining isolation.
+   */
+  warnings?: string[];
+  /**
+   * Frontmatter keys the translation OWNS: if the flow already supplies one
+   * of these natively, the run hard-fails rather than silently letting
+   * argument order decide (e.g. claude `settings:`). Checked against the
+   * flow's own frontmatter, not mdflow-injected defaults.
+   */
+  exclusiveKeys?: string[];
 }
 
 /**

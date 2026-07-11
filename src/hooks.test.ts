@@ -28,6 +28,7 @@ import {
   applyHooksToFrontmatter,
 } from "./hooks";
 import { codexAdapter } from "./adapters/codex";
+import { claudeAdapter } from "./adapters/claude";
 import type { AgentFrontmatter } from "./types";
 
 let tempDir: string;
@@ -541,11 +542,48 @@ describe("applyHooksToFrontmatter", () => {
       _hooks: true,
       config: ["project_doc_max_bytes=0"],
     };
-    const result = applyHooksToFrontmatter(codexAdapter, "codex", frontmatter, spec);
+    const { frontmatter: result } = applyHooksToFrontmatter(codexAdapter, "codex", frontmatter, spec);
     expect(result._hooks).toBeUndefined();
     expect(result["dangerously-bypass-hook-trust"]).toBe(true);
     const configs = result.config as string[];
     expect(configs[0]).toBe("project_doc_max_bytes=0");
     expect(configs[1]).toStartWith("hooks={Stop=[{hooks=[{type=");
+  });
+
+  it("claude translation: injects inline --settings, excludes ambient sources, drops safe-mode, discloses", () => {
+    const { frontmatter: result, warnings } = applyHooksToFrontmatter(
+      claudeAdapter,
+      "claude",
+      { _hooks: true, "safe-mode": true, "no-session-persistence": true },
+      { hooksFile: "/tmp/f/review.claude.hooks.ts", events: ["userPromptSubmit", "stop"], isolated: true }
+    );
+    expect(result._hooks).toBeUndefined();
+    expect(result["safe-mode"]).toBe(false);
+    expect(result["setting-sources"]).toBe("");
+    const settings = JSON.parse(result.settings as string);
+    expect(Object.keys(settings.hooks)).toEqual(["UserPromptSubmit", "Stop"]);
+    expect(settings.hooks.UserPromptSubmit[0].matcher).toBe("");
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].type).toBe("command");
+    expect(warnings.join("\n")).toContain("HOOKS_ISOLATION_REDUCED");
+  });
+
+  it("claude hooks require isolation", () => {
+    expect(() =>
+      applyHooksToFrontmatter(claudeAdapter, "claude", {}, {
+        hooksFile: "/tmp/f/x.claude.hooks.ts",
+        events: ["stop"],
+        isolated: false,
+      })
+    ).toThrow(/require isolation/);
+  });
+
+  it("claude hard-fails when the flow already sets native settings:", () => {
+    expect(() =>
+      applyHooksToFrontmatter(claudeAdapter, "claude", { settings: "./mine.json" }, {
+        hooksFile: "/tmp/f/x.claude.hooks.ts",
+        events: ["stop"],
+        isolated: true,
+      })
+    ).toThrow(/own the `settings` setting/);
   });
 });

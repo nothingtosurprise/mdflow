@@ -22,7 +22,15 @@ import type {
   AgentFrontmatter,
   SystemPromptSpec,
   SystemPromptTranslation,
+  HooksSpec,
+  HooksTranslation,
 } from "../types";
+import {
+  buildClaudeHooksSettings,
+  buildClaudeHooksSettingsValue,
+  type CanonicalHookEvent,
+} from "../hooks";
+import { CommandError } from "../errors";
 
 export const claudeAdapter: ToolAdapter = {
   name: "claude",
@@ -46,6 +54,58 @@ export const claudeAdapter: ToolAdapter = {
     return {
       "safe-mode": true,
       "no-session-persistence": true,
+    };
+  },
+
+  /**
+   * Hooks ride in via `--settings <inline JSON>` — Claude Code's per-run
+   * settings channel. Verified on Claude Code 2.1.207
+   * (docs/claude-hooks-probe-2026-07.md):
+   *
+   * - `--safe-mode` SUPPRESSES `--settings` hooks (and all ambient hooks), so
+   *   a hooked run cannot use it. mdflow drops `--safe-mode` here and instead
+   *   excludes ambient settings with `--setting-sources ""` (which keeps the
+   *   injected `--settings` hooks while dropping user/project/local settings
+   *   and THEIR hooks — the security parallel to codex's prepared home; no
+   *   trust-bypass exists on claude).
+   * - Dropping `--safe-mode` also stops disabling CLAUDE.md, skills, plugins,
+   *   and MCP. That is a real reduction in context isolation, so it is
+   *   DISCLOSED (never silent). Managed/admin policy hooks, if any, remain.
+   * - No hook-specific consent flag is needed in print mode.
+   *
+   * Hooks require isolation (parity with codex, and because the recipe
+   * deliberately manipulates setting-sources). The flow must not also set a
+   * native `settings:` — that ownership conflict hard-fails upstream.
+   */
+  applyHooks(spec: HooksSpec): HooksTranslation {
+    if (!spec.isolated) {
+      throw new CommandError(
+        `Flow hooks on claude require isolation (the default). Remove ` +
+          `\`_isolated: false\` or set \`_hooks: false\`.`,
+        { errorCode: "HOOKS_REQUIRE_ISOLATION", context: { hooksFile: spec.hooksFile } }
+      );
+    }
+    const settings = buildClaudeHooksSettings({
+      hooksFile: spec.hooksFile,
+      events: spec.events as CanonicalHookEvent[],
+    });
+    return {
+      frontmatter: {
+        settings: buildClaudeHooksSettingsValue(settings),
+        // Exclude ambient user/project/local settings (and their hooks) while
+        // keeping our injected --settings hooks.
+        "setting-sources": "",
+        // --safe-mode would suppress the injected hooks; it must be off.
+        "safe-mode": false,
+      },
+      exclusiveKeys: ["settings"],
+      warnings: [
+        "Warning [HOOKS_ISOLATION_REDUCED]: claude hooks require dropping " +
+          "--safe-mode, so CLAUDE.md, skills, plugins, and MCP are NOT " +
+          "disabled for this run (ambient settings and their hooks are still " +
+          "excluded via --setting-sources ''). Managed/admin policy hooks, if " +
+          "configured, also still apply.",
+      ],
     };
   },
 

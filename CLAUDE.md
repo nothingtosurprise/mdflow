@@ -291,6 +291,29 @@ see the probe evidence rules below before changing any of this):
 - The prepared codex home is a SHARED dir; every write into it (auth
   symlink, config.toml) is atomic (temp + rename) so concurrent mdflow
   processes never see a torn file.
+
+Claude translation (verified on Claude Code 2.1.207 —
+docs/claude-hooks-probe-2026-07.md):
+- Hooks ride in via `--settings <inline JSON>` (Claude's per-run settings
+  channel): `{"hooks":{"Event":[{"matcher":"","hooks":[{"type":"command","command":"'<bun>' '<file>'","timeout":60}]}]}}`.
+  Event keys PascalCase; `matcher:""` matches every occurrence.
+- CENTRAL GATE: `--safe-mode` SUPPRESSES `--settings` hooks (and all ambient
+  hooks), so a hooked run drops it. Ambient hooks are instead excluded with
+  `--setting-sources ""` (keeps injected `--settings` hooks; drops
+  user/project/local settings and THEIR hooks — the security parallel to
+  codex's prepared home; no trust-bypass exists on claude). Dropping
+  `--safe-mode` also stops disabling CLAUDE.md/skills/plugins/MCP — a real
+  isolation reduction, so it is DISCLOSED on stderr
+  (HOOKS_ISOLATION_REDUCED), never silent. Managed/admin policy hooks (if
+  any) remain. Hooks REQUIRE isolation (parity with codex). A flow that also
+  sets native `settings:` hard-fails (ownership conflict) rather than let
+  argv order decide.
+- Print-mode `claude -p` fires SessionStart, UserPromptSubmit, PreToolUse,
+  PostToolUse, Stop, SessionEnd (SessionEnd DOES fire, unlike codex); the
+  rest are registered but scenario-dependent. Same stdin/stdout contract as
+  codex (compact JSON + newline; exit 2 or decision-JSON blocks; hook
+  exit-1/timeout fail open). No hook-specific consent flag needed in `-p`.
+
 Engines with no verified hook mechanism FAIL a run whose hooks file exists
 (same policy as `_system-prompt`); `_hooks: false` opts out. Never add an
 engine translation from guessed config — verify against the engine's own
