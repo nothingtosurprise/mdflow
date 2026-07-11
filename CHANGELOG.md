@@ -1,3 +1,23 @@
+# [4.4.0](https://github.com/johnlindquist/mdflow/compare/v4.3.1...v4.4.0) (2026-07-11)
+
+
+### Bug Fixes
+
+* **command:** stop passing the parent's open stdin to print-mode engines ([9adfbc2](https://github.com/johnlindquist/mdflow/commit/9adfbc21b8e0f9f2471d700357162db31d38beb7))
+* **compat:** never corrupt flow-mapping frontmatter when stamping versions ([06b143c](https://github.com/johnlindquist/mdflow/commit/06b143ce66302bc3dabd196a2b73edecea560c37))
+
+
+### Features
+
+* **hooks:** lifecycle hooks by convention, codex-first ([736e937](https://github.com/johnlindquist/mdflow/commit/736e937ce599dc648233287c053af246b2701e0d))
+* **render:** md render + hooks/render wired through the CLI runner ([fef3584](https://github.com/johnlindquist/mdflow/commit/fef35844d9e8af0a2fe1ed77fcabb6255892d6fa))
+* **workbench:** search-first TUI, tab-safe prompts, explicit creation scope ([742459f](https://github.com/johnlindquist/mdflow/commit/742459f67bde3590b60627625da3c4441ed3115c))
+
+
+### Performance Improvements
+
+* **cli:** pre-runner help router and lazy startup boundaries ([ad202e7](https://github.com/johnlindquist/mdflow/commit/ad202e7db0e55eafe4ce747e67d05cc2824265b5))
+
 ## [4.3.1](https://github.com/johnlindquist/mdflow/compare/v4.3.0...v4.3.1) (2026-07-10)
 
 
