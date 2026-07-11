@@ -1,13 +1,14 @@
 import { expect, test, describe, beforeAll, afterAll } from "bun:test";
-import { writeFile } from "fs/promises";
+import { chmod, mkdir, writeFile } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { delimiter, join } from "path";
 import {
   extractFlag,
   createFlagExtractionTests,
   spawnMd,
   createTempDir,
   createTestAgent,
+  CLI_PATH,
 } from "./test-utils";
 
 /**
@@ -89,6 +90,42 @@ Hello, this is a test prompt.`
     expect(result.stdout).toContain("Estimated tokens:");
   });
 
+  test("--dry-run is owned by md and never spawns the engine", async () => {
+    const binDir = join(tempDir, `dry-run-bin-${Date.now()}`);
+    const sentinel = join(tempDir, `dry-run-engine-spawned-${Date.now()}`);
+    await mkdir(binDir, { recursive: true });
+    const fakeCodex = join(binDir, "codex");
+    await writeFile(
+      fakeCodex,
+      '#!/bin/sh\nprintf "spawned\\n" > "$MDFLOW_DRY_RUN_SENTINEL"\nexit 0\n',
+    );
+    await chmod(fakeCodex, 0o755);
+    const testFile = await createTestAgent(
+      tempDir,
+      "owned-dry-run.codex.md",
+      `---
+model: gpt-5.5
+---
+Preview this prompt without executing it.`,
+    );
+
+    const result = await spawnMd([testFile, "--dry-run"], {
+      env: {
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        MDFLOW_DRY_RUN_SENTINEL: sentinel,
+        MDFLOW_ENGINE: "",
+        HOME: join(tempDir, `dry-run-home-${Date.now()}`),
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DRY RUN");
+    expect(result.stdout).toContain("Command:\n   codex ");
+    expect(result.stdout).toContain("Estimated tokens:");
+    expect(result.stdout).not.toContain("--dry-run");
+    expect(existsSync(sentinel)).toBe(false);
+  });
+
   test("dry-run with template variables shows substituted values", async () => {
     const testFile = await createTestAgent(
       tempDir,
@@ -128,7 +165,7 @@ Test prompt for generic file.`
   });
 
   test("dry-run shows estimated token count", async () => {
-    // With real tokenization, repeated "A" characters get tokenized efficiently
+    // The displayed value is intentionally a cheap estimate.
     const promptText = "A".repeat(400);
     const testFile = await createTestAgent(
       tempDir,
@@ -143,6 +180,56 @@ ${promptText}`
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toMatch(/Estimated tokens: ~\d+/);
+  });
+
+  test("dry-run never imports gpt-tokenizer", async () => {
+    const preloadPath = join(tempDir, `forbid-tokenizer-${Date.now()}.ts`);
+    await writeFile(
+      preloadPath,
+      `Bun.plugin({
+  name: "forbid-gpt-tokenizer",
+  setup(builder) {
+    builder.onLoad({ filter: /gpt-tokenizer/ }, () => {
+      throw new Error("GPT_TOKENIZER_IMPORT_FORBIDDEN");
+    });
+  },
+});
+`,
+    );
+    const testFile = await createTestAgent(
+      tempDir,
+      "no-tokenizer.claude.md",
+      `---
+model: opus
+---
+${"Token estimate text. ".repeat(20)}`,
+    );
+
+    const dryRun = Bun.spawn(
+      [process.execPath, `--preload=${preloadPath}`, "run", CLI_PATH, testFile, "--dry-run"],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+    );
+    const [dryRunStdout, dryRunStderr, dryRunExitCode] = await Promise.all([
+      new Response(dryRun.stdout).text(),
+      new Response(dryRun.stderr).text(),
+      dryRun.exited,
+    ]);
+
+    expect(dryRunExitCode).toBe(0);
+    expect(dryRunStdout).toContain("Estimated tokens:");
+    expect(dryRunStderr).not.toContain("GPT_TOKENIZER_IMPORT_FORBIDDEN");
+
+    // Control: prove the preload hook really catches an accurate-tokenizer import.
+    const control = Bun.spawn(
+      [process.execPath, `--preload=${preloadPath}`, "-e", 'await import("gpt-tokenizer")'],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+    );
+    const [controlStderr, controlExitCode] = await Promise.all([
+      new Response(control.stderr).text(),
+      control.exited,
+    ]);
+    expect(controlExitCode).not.toBe(0);
+    expect(controlStderr).toContain("GPT_TOKENIZER_IMPORT_FORBIDDEN");
   });
 
   test("dry-run does NOT execute the command", async () => {

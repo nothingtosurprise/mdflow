@@ -294,7 +294,7 @@ Test prompt`);
 
       expect(result.exitCode).toBe(0);
       expect(result.dryRun).toBe(true);
-      expect(result.logPath).toBeTruthy();
+      expect(result.logPath).toBeNull();
     });
 
     it("includes stdin content via _stdin template variable", async () => {

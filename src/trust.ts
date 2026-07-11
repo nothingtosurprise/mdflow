@@ -12,7 +12,6 @@
 import { homedir } from "os";
 import { join } from "path";
 import { mkdir } from "fs/promises";
-import { confirm, select } from "@inquirer/prompts";
 import type { AgentFrontmatter } from "./types";
 
 const CONFIG_DIR = join(homedir(), ".mdflow");
@@ -171,6 +170,10 @@ export async function promptForTrust(
   console.error("");
   console.error("=".repeat(70));
   console.error("");
+
+  // Inquirer loads lazily: trust prompts only appear for untrusted remote
+  // flows, and its ~50ms import must never tax ordinary local startup.
+  const { confirm, select } = await import("@inquirer/prompts");
 
   // First confirm execution
   const approved = await confirm({

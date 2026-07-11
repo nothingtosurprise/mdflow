@@ -16,7 +16,7 @@ import { resolveCommand, buildArgs, runCommand, extractPositionalMappings, extra
 import { expandImports, hasImports, type ResolvedImportsTracker } from "./imports";
 import { loadEnvFiles } from "./env";
 import { loadGlobalConfig, getCommandDefaults, applyDefaults } from "./config";
-import { initLogger, getParseLogger, getTemplateLogger, getCommandLogger, getImportLogger, getCurrentLogPath } from "./logger";
+import { initLogger, getParseLogger, getTemplateLogger, getCommandLogger, getImportLogger, getCurrentLogPath, resetLogger } from "./logger";
 import type { AgentFrontmatter, ExecutionPlan } from "./types";
 import type { RunResult } from "./command";
 import { countTokens } from "./tokenizer";
@@ -223,12 +223,19 @@ export class AgentRuntime {
     resolved: ResolvedSource,
     options: RuntimeOptions = {}
   ): Promise<AgentContext> {
-    // Load .env files from the markdown file's directory
-    await loadEnvFiles(resolved.directory);
+    // A dry run is planning-only: keep it free of Pino and log-directory
+    // side effects. Real runs retain early initialization so context failures
+    // still have a diagnostic log path.
+    resetLogger();
+    if (options.dryRun) {
+      this.logPath = null;
+    } else {
+      initLogger(resolved.path);
+      this.logPath = getCurrentLogPath();
+    }
 
-    // Initialize logger for this agent
-    initLogger(resolved.path);
-    this.logPath = getCurrentLogPath();
+    // Load .env files from the markdown file's directory.
+    await loadEnvFiles(resolved.directory);
 
     // Parse frontmatter
     const { frontmatter: baseFrontmatter, body: rawBody } = parseFrontmatter(resolved.content);
