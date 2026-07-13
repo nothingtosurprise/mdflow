@@ -10,15 +10,15 @@ export const FlowMark: React.FC<{ size?: number; className?: string }> = ({ size
     <svg
         width={size}
         height={size}
-        viewBox="0 0 24 24"
+        viewBox="0 0 16 16"
         fill="none"
         className={className}
         aria-hidden="true"
     >
-        <g stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-            <path d="m4 7 5 5-5 5" opacity={0.3} />
-            <path d="m10 7 5 5-5 5" opacity={0.6} />
-            <path d="m16 7 5 5-5 5" />
+        <g stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round">
+            <path d="m2.5 4.5 3.5 3.5-3.5 3.5" opacity={0.3} />
+            <path d="m6.5 4.5 3.5 3.5-3.5 3.5" opacity={0.6} />
+            <path d="m10.5 4.5 3.5 3.5-3.5 3.5" />
         </g>
     </svg>
 );
