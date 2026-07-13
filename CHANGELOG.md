@@ -1,3 +1,10 @@
+# [4.6.0](https://github.com/johnlindquist/mdflow/compare/v4.5.0...v4.6.0) (2026-07-13)
+
+
+### Features
+
+* **evals:** add fail-closed eval convention ([551a03c](https://github.com/johnlindquist/mdflow/commit/551a03cd958eda403817e5b2823ccd7650dc82fa))
+
 # [4.5.0](https://github.com/johnlindquist/mdflow/compare/v4.4.0...v4.5.0) (2026-07-11)
 
 
