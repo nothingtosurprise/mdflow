@@ -1,3 +1,10 @@
+## [4.6.1](https://github.com/johnlindquist/mdflow/compare/v4.6.0...v4.6.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **codex:** isolate ambient hooks for every flow ([1453567](https://github.com/johnlindquist/mdflow/commit/1453567a237bea7e277305637174f48126caba8c))
+
 # [4.6.0](https://github.com/johnlindquist/mdflow/compare/v4.5.0...v4.6.0) (2026-07-13)
 
 
