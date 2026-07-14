@@ -125,3 +125,29 @@ export function applyIsolationDefaults(
   mergeLayer(frontmatter);
   return result;
 }
+
+/**
+ * Apply an adapter's environment half of isolation. Environment isolation is
+ * authoritative: a flow cannot point CODEX_HOME (or a future equivalent) back
+ * at ambient state while `_isolated` remains enabled.
+ */
+export function applyIsolationEnvironment(
+  frontmatter: AgentFrontmatter,
+  adapter: ToolAdapter,
+  prepareEnvironment: boolean
+): AgentFrontmatter {
+  if (!adapter.prepareIsolationEnv) return frontmatter;
+  const isolationEnv = adapter.prepareIsolationEnv({ prepareEnvironment });
+  if (!isolationEnv || Object.keys(isolationEnv).length === 0) return frontmatter;
+
+  const existingEnv =
+    typeof frontmatter._env === "object" &&
+    frontmatter._env !== null &&
+    !Array.isArray(frontmatter._env)
+      ? (frontmatter._env as Record<string, string>)
+      : {};
+  return {
+    ...frontmatter,
+    _env: { ...existingEnv, ...isolationEnv },
+  };
+}

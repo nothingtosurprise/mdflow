@@ -4,8 +4,10 @@
  * Print mode: Use 'exec' subcommand for non-interactive execution
  * Interactive mode: Remove subcommand (interactive is the default)
  *
- * Isolation (`_isolated: true`), all keys verified against codex exec --help
- * and the config schema (wrong-typed values fail config load):
+ * Isolation (`_isolated: true`): every run gets a prepared CODEX_HOME with
+ * auth + workspace trust but no ambient config/hooks/plugins. In exec mode,
+ * these additional keys were verified against codex exec --help and the
+ * config schema (wrong-typed values fail config load):
  *   --ignore-user-config        don't load ~/.codex/config.toml (drops user
  *                               MCP servers/profiles; auth still works)
  *   --ephemeral                 no session persistence
@@ -40,6 +42,14 @@ import { CommandError } from "../errors";
 /** Flags that only exist on `codex exec`, not top-level codex. */
 const EXEC_ONLY_ISOLATION_FLAGS = ["ignore-user-config", "ephemeral"] as const;
 
+function codexIsolationEnv(prepareEnvironment: boolean): Record<string, string> {
+  return {
+    CODEX_HOME: prepareEnvironment
+      ? prepareCodexHooksHome()
+      : preparedCodexHooksHome(),
+  };
+}
+
 export const codexAdapter: ToolAdapter = {
   name: "codex",
 
@@ -66,6 +76,10 @@ export const codexAdapter: ToolAdapter = {
       ephemeral: true,
       config: ["project_doc_max_bytes=0"],
     };
+  },
+
+  prepareIsolationEnv(spec): Record<string, string> {
+    return codexIsolationEnv(spec.prepareEnvironment);
   },
 
   /**
@@ -99,16 +113,12 @@ export const codexAdapter: ToolAdapter = {
     });
     // Passive surfaces (explain, dry-run) show the same env a run would use
     // but must not write anything — the home is prepared only for real runs.
-    const codexHome =
-      spec.prepareEnvironment === false
-        ? preparedCodexHooksHome()
-        : prepareCodexHooksHome();
     return {
       frontmatter: {
         config: [buildCodexHooksOverride(config)],
         "dangerously-bypass-hook-trust": true,
       },
-      env: { CODEX_HOME: codexHome },
+      env: codexIsolationEnv(spec.prepareEnvironment !== false),
     };
   },
 

@@ -483,6 +483,17 @@ export interface ToolAdapter {
   getIsolationDefaults?(): CommandDefaults;
 
   /**
+   * Optional: contribute environment variables required to make isolation
+   * complete. Unlike `prepareEnv`, these values apply only while isolation is
+   * enabled and override ambient/flow `_env` values that would defeat the
+   * isolation boundary. Passive surfaces pass `prepareEnvironment: false` so
+   * adapters can describe the environment without writing to disk.
+   */
+  prepareIsolationEnv?(spec: {
+    prepareEnvironment: boolean;
+  }): Record<string, string> | undefined;
+
+  /**
    * Optional: translate the canonical `_system-prompt` /
    * `_append-system-prompt` keys into engine-native configuration. Absent =
    * the engine has no supported mechanism and the run FAILS (a silently

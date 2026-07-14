@@ -75,6 +75,13 @@ describe("hooks in the run pipeline (dry-run)", () => {
     expect(result.stderr).not.toContain("hooks:");
   });
 
+  it("explain shows the isolated CODEX_HOME even when no hooks file exists", async () => {
+    const flow = writeFlow();
+    const result = await runCli(["explain", flow]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("CODEX_HOME=****");
+  });
+
   it("_hooks: false disables a present convention file", async () => {
     writeFileSync(
       join(dir, "task.codex.md"),

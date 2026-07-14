@@ -8,6 +8,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   applyIsolationDefaults,
+  applyIsolationEnvironment,
   resolveIsolationMode,
   resolveIsolationDefaults,
 } from "./isolation";
@@ -82,6 +83,21 @@ describe("per-engine isolation defaults (verified flags only)", () => {
       ephemeral: true,
       config: ["project_doc_max_bytes=0"],
     });
+  });
+
+  test("codex: isolated runs always target the prepared ambient-hook-free home", () => {
+    const env = codexAdapter.prepareIsolationEnv!({ prepareEnvironment: false });
+    expect(env?.CODEX_HOME).toContain("/.mdflow/codex-hooks-home");
+  });
+
+  test("codex: the isolation environment overrides an ambient flow CODEX_HOME", () => {
+    const isolated = applyIsolationEnvironment(
+      { _env: { CODEX_HOME: "/ambient", KEEP: "yes" } },
+      codexAdapter,
+      false
+    );
+    expect(isolated._env?.CODEX_HOME).toContain("/.mdflow/codex-hooks-home");
+    expect(isolated._env?.KEEP).toBe("yes");
   });
 
   test("gemini: --extensions none", () => {

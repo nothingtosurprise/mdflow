@@ -32,6 +32,7 @@ import {
 import { getAdapter as getEngineAdapter } from "./adapters";
 import {
   applyIsolationDefaults,
+  applyIsolationEnvironment,
   resolveIsolationMode,
   resolveIsolationDefaults,
 } from "./isolation";
@@ -192,6 +193,13 @@ export async function analyzeAgent(
   else if (interactiveFromFrontmatter) interactiveModeSource = "Frontmatter (_interactive: true)";
 
   frontmatter = applyInteractiveMode(frontmatter, command, interactiveFromFilename || interactiveFromCli);
+
+  // Mirror the run's environment boundary without materializing it. This is
+  // especially important for hookless Codex flows: their prepared CODEX_HOME
+  // is part of isolation even though no lifecycle-hook flags are present.
+  if (isolationMode.isolated && engineAdapter.prepareIsolationEnv) {
+    frontmatter = applyIsolationEnvironment(frontmatter, engineAdapter, false);
+  }
 
   // System prompt: apply the same translation a run would, with a
   // placeholder writer so explain never touches the filesystem.

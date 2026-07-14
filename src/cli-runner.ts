@@ -45,6 +45,7 @@ import {
 import { getAdapter as getEngineAdapter } from "./adapters";
 import {
   applyIsolationDefaults,
+  applyIsolationEnvironment,
   resolveIsolationMode,
   resolveIsolationDefaults,
 } from "./isolation";
@@ -2211,6 +2212,18 @@ export class CliRunner {
       interactiveFromFilename || interactiveFromCli
     );
     frontmatter = applyInteractiveMode(frontmatter, command, interactiveFromFilename || interactiveFromCli);
+
+    // Some engines require an environment boundary in addition to CLI flags.
+    // Codex is the important case: --ignore-user-config is exec-only and does
+    // not suppress hooks.json anyway, so every isolated run (including a
+    // hookless interactive flow) must use the prepared, ambient-hook-free home.
+    if (isolationMode.isolated && engineAdapter.prepareIsolationEnv) {
+      frontmatter = applyIsolationEnvironment(
+        frontmatter,
+        engineAdapter,
+        !parsed.dryRun
+      );
+    }
 
     // System prompt override (v3): translate _system-prompt /
     // _append-system-prompt into engine-native flags/env. Runs BEFORE

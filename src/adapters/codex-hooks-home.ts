@@ -1,5 +1,10 @@
 /**
- * Prepared CODEX_HOME for hooked codex runs.
+ * Prepared CODEX_HOME for isolated codex runs.
+ *
+ * Codex has no top-level interactive flag that excludes user config, and its
+ * exec-only `--ignore-user-config` flag still loads `$CODEX_HOME/hooks.json`.
+ * Every isolated Codex flow therefore uses this home, whether or not the flow
+ * declares lifecycle hooks.
  *
  * mdflow injects flow hooks with `--dangerously-bypass-hook-trust`, and that
  * flag is invocation-wide: against the user's real `~/.codex` it would also
