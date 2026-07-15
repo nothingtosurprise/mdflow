@@ -137,7 +137,9 @@ const facts = {
 	defaultEngine: DEFAULT_ENGINE,
 	engines,
 	enginesLabel,
-	install: "npx mdflow init",
+	// The headline command. Bare `npx mdflow` offers first-run setup when a
+	// project has no flows and opens the Workbench once a roster exists.
+	install: "npx mdflow",
 	repo: "https://github.com/johnlindquist/mdflow",
 	ladder,
 	commands,

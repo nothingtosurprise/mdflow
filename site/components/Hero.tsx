@@ -136,9 +136,10 @@ export const Hero: React.FC = () => {
                         </div>
 
                         <p className="mt-5 max-w-xl text-sm text-zinc-500 leading-relaxed">
-                            Start with npx — mdflow safely scaffolds a <span className="font-mono text-zinc-400">./flows</span> roster
-                            with zero engine invocations, then bare <span className="font-mono text-zinc-400">md</span> opens the Workbench.
-                            Want a repo-tailored setup conversation? Use <span className="font-mono text-zinc-400">--guided</span>.
+                            One command, start to finish. No flows yet? It offers first-run setup —
+                            guided by the agent CLI you already use, a zero-engine scaffold of
+                            <span className="font-mono text-zinc-400"> ./flows</span>, or a setup prompt to paste
+                            into any agent. Once a roster exists, the same command opens the Workbench.
                         </p>
                     </motion.div>
                 </div>

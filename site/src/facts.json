@@ -14,7 +14,7 @@
     "agy"
   ],
   "enginesLabel": "claude, copilot, codex, gemini, droid, opencode, pi, cursor-agent, agy (Antigravity)",
-  "install": "npx mdflow init",
+  "install": "npx mdflow",
   "repo": "https://github.com/johnlindquist/mdflow",
   "ladder": [
     {
