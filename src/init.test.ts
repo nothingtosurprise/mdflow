@@ -391,6 +391,21 @@ describe("first-run predicate (project-owned locations only)", () => {
 		);
 	});
 
+	it("suppresses setup on indeterminate roster entries (dangling symlink, non-regular .md)", async () => {
+		const { symlinkSync } = require("node:fs") as typeof import("node:fs");
+		mkdirSync(join(dir, ".git"), { recursive: true });
+		mkdirSync(join(dir, "flows"), { recursive: true });
+		symlinkSync(join(dir, "nowhere.md"), join(dir, "flows", "custom.md"));
+		expect(await shouldOfferFirstRunSetup({ cwd: dir, homeDir: home() })).toBe(
+			false,
+		);
+		rmSync(join(dir, "flows", "custom.md"));
+		mkdirSync(join(dir, "flows", "weird.md"));
+		expect(await shouldOfferFirstRunSetup({ cwd: dir, homeDir: home() })).toBe(
+			false,
+		);
+	});
+
 	it("suppresses setup when a legacy .mdflow roster or project registry exists", async () => {
 		mkdirSync(join(dir, ".git"), { recursive: true });
 		mkdirSync(join(dir, ".mdflow"), { recursive: true });
@@ -455,6 +470,17 @@ process.exit(await runInit(process.argv.slice(2)));`,
 			expect(result.exitCode).toBe(1);
 			expect(existsSync(join(dir, "flows"))).toBe(false);
 		}
+	});
+
+	it("refuses a non-regular .mdflow.yaml with a nonzero INCOMPLETE result", () => {
+		// A directory (or FIFO/socket) at the config path means the required
+		// config cannot exist — that is never "already exists" success.
+		mkdirSync(join(dir, ".mdflow.yaml"));
+		const result = spawnInit("--yes");
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr.toString()).toContain("not a regular file");
+		expect(result.stdout.toString()).toContain("INCOMPLETE");
+		expect(result.stdout.toString()).not.toContain("mdflow is ready");
 	});
 
 	it("exits nonzero with an INCOMPLETE receipt when a required write is refused", () => {

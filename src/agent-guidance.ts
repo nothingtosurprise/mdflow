@@ -5,15 +5,20 @@
  * repository, mdflow maintains one marker-delimited block in `AGENTS.md` and
  * `CLAUDE.md` at the project root pointing coding agents at the flow roster.
  *
- * Opt-in is explicit: default `md roster sync` only refreshes files that
- * already contain the markers; `md roster sync --agents` (or the init-time
- * question) creates them. Everything outside the markers is user-owned.
+ * Consent is explicit: EVERY write — creating, extending, or refreshing a
+ * stale block — requires the `--agents` opt-in (or the init-time question).
+ * A marker already present in the repository is data, not the current
+ * user's authorization, so plain `md roster sync` only REPORTS drift.
+ * Everything outside the markers is user-owned.
  *
- * The sync is fail-closed as one multi-file operation: every target is
- * preflighted before the first write, and if ANY target is invalid (bad
- * markers, ambiguous markdown, symlink, non-regular file) nothing is written
- * at all. Each write re-reads its target immediately before the atomic
- * rename and refuses to clobber bytes that changed since inspection.
+ * The sync is PREFLIGHT-FAIL-CLOSED as one multi-file operation: every
+ * target is inspected before the first write, and if ANY target is invalid
+ * (bad markers, ambiguous markdown, symlink, non-regular file) nothing is
+ * written at all; a write failure stops every remaining write. It is not a
+ * journaled transaction — an unexpected commit failure on a later target
+ * leaves earlier committed targets in place and is surfaced as an error.
+ * Each write re-reads its target immediately before the atomic rename and
+ * refuses to clobber bytes that changed since inspection.
  */
 
 import {
@@ -106,7 +111,20 @@ function inspectFile(
 		let stats: ReturnType<typeof lstatSync> | null = null;
 		try {
 			stats = lstatSync(path);
-		} catch {
+		} catch (error) {
+			// Only genuine absence is "missing"; any other inspection failure is
+			// INVALID so the preflight boundary stops the whole unit before the
+			// first write instead of discovering the problem mid-operation.
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR")
+				return {
+					file,
+					path,
+					state: "invalid",
+					error: `cannot inspect ${file}: ${error instanceof Error ? error.message : String(error)}`,
+					source: null,
+					mode: null,
+				};
 			stats = null;
 		}
 		if (!stats)

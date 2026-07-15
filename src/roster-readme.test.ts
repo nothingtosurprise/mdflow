@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
 	mkdtempSync,
 	readFileSync,
@@ -224,6 +225,31 @@ describe("managed roster README", () => {
 		expect(payload.ok).toBe(false);
 		expect(existsSync(join(root, "AGENTS.md"))).toBe(false);
 		expect(existsSync(join(root, "CLAUDE.md"))).toBe(false);
+	});
+
+	it("never replaces a README it cannot read (fail-closed, not 'missing')", () => {
+		const root = project();
+		flow(root, "review.md", "Review changes");
+		const path = join(root, "flows", "README.md");
+		writeFileSync(path, "# Team notes\n\nUser-owned text.\n");
+		chmodSync(path, 0o000);
+		try {
+			const result = syncRosterReadme(root);
+			expect(result.state).toBe("invalid");
+			expect(result.changed).toBe(false);
+		} finally {
+			chmodSync(path, 0o644);
+		}
+		expect(readFileSync(path, "utf8")).toBe("# Team notes\n\nUser-owned text.\n");
+	});
+
+	it("refuses a non-regular README instead of treating it as absent", () => {
+		const root = project();
+		flow(root, "review.md", "Review changes");
+		mkdirSync(join(root, "flows", "README.md"));
+		const result = syncRosterReadme(root);
+		expect(result.state).toBe("invalid");
+		expect(result.changed).toBe(false);
 	});
 
 	it("writes nothing at all when any guidance file is invalid (one unit)", async () => {

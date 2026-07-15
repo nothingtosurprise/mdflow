@@ -444,16 +444,38 @@ export function scaffoldStarterFlows(cwd: string, engine: string): ScaffoldResul
 	// lstat (never follow): a dangling config symlink reads as "missing" to
 	// existsSync, and a plain write would create the symlink's TARGET. "wx"
 	// additionally refuses to write through any existing path, racing or not.
+	// Only a regular file counts as "already exists"; a directory, FIFO, or
+	// socket at the config path means the required config CANNOT exist —
+	// that is a refusal, never a success. Non-absence inspection errors fail
+	// closed.
 	let configStats: ReturnType<typeof lstatSync> | null = null;
+	let configInspectError: string | null = null;
 	try {
 		configStats = lstatSync(configPath);
-	} catch {
-		configStats = null;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ENOTDIR") {
+			configStats = null;
+		} else {
+			configInspectError =
+				error instanceof Error ? error.message : String(error);
+			configStats = null;
+		}
 	}
-	if (configStats?.isSymbolicLink()) {
+	if (configInspectError) {
+		failed++;
+		lines.push(
+			`  failed ${PROJECT_CONFIG_FILE} (cannot inspect: ${configInspectError})`,
+		);
+	} else if (configStats?.isSymbolicLink()) {
 		refused++;
 		lines.push(
 			`  refused ${PROJECT_CONFIG_FILE} (symlink — init never writes through symlinks)`,
+		);
+	} else if (configStats && !configStats.isFile()) {
+		refused++;
+		lines.push(
+			`  refused ${PROJECT_CONFIG_FILE} (exists but is not a regular file — remove it and re-run)`,
 		);
 	} else if (configStats) {
 		lines.push(`  skipped ${PROJECT_CONFIG_FILE} (already exists)`);

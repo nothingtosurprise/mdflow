@@ -201,9 +201,18 @@ export async function collectRoster(
 			let mtimeMs: number;
 			try {
 				const stats = statSync(path);
-				if (!stats.isFile()) continue;
+				if (!stats.isFile()) {
+					// A directory/FIFO/etc. named *.md is indeterminate roster
+					// state, not emptiness — surface it so consumers (first-run
+					// detection, doctor) can fail closed.
+					warnings.push(`Skipping ${path}: not a regular file`);
+					continue;
+				}
 				mtimeMs = Math.floor(stats.mtimeMs);
-			} catch {
+			} catch (err) {
+				// A discovered *.md entry that cannot be statted (dangling
+				// symlink, permission error) is indeterminate, never silent.
+				warnings.push(`Skipping ${path}: ${(err as Error).message}`);
 				continue;
 			}
 

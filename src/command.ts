@@ -779,7 +779,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
         "handoff spends another engine invocation without a new consent " +
         "boundary. If this nesting is deliberate, re-run with " +
         "--_allow-nested.",
-      { errorCode: "COMMAND_EXECUTION_FAILED", context: { command: normalizedCommand } },
+      { errorCode: "NESTED_FLOW", context: { command: normalizedCommand } },
     );
   }
   runEnv.MDFLOW_ACTIVE_FLOW = "1";

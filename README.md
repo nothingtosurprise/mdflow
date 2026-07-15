@@ -16,10 +16,11 @@ npx mdflow init
 
 One command safely creates a starter `./flows` roster and `.mdflow.yaml` with
 zero engine invocations; repeat runs leave an existing roster untouched. Then
-bare `md` opens the Flow Workbench — and on a machine with no flows at all, it
-offers first-run setup instead of an empty screen: guided setup with an
-installed agent CLI, a deterministic scaffold, or a printed setup prompt to
-paste into any agent. Want the repo-tailored setup conversation directly? Run
+bare `md` opens the Flow Workbench — and in a project with no owned flow
+roster (canonical `flows/`, legacy `.mdflow/`, or project registry; personal
+global flows don't count), it offers first-run setup instead of an empty
+screen: guided setup with an installed agent CLI, a deterministic scaffold,
+or a printed setup prompt to paste into any agent. Want the repo-tailored setup conversation directly? Run
 `md init --guided` (or `md init --print-guide` to copy the same guide into
 your own agent session).
 

@@ -265,9 +265,12 @@ export function syncRosterReadme(
 	if (inspection.state === "current" || options.check)
 		return { ...inspection, changed: false };
 	// Containment: a symlinked flows/ (or README.md symlink) would redirect
-	// this write outside the project; refuse instead of following it.
+	// this write outside the project; refuse instead of following it. All
+	// subsequent I/O uses the CANONICAL checked target, never the lexical
+	// inspection path.
+	let target: string;
 	try {
-		containedWritePath(root, "flows", "README.md");
+		target = containedWritePath(root, "flows", "README.md");
 	} catch (error) {
 		return {
 			...inspection,
@@ -279,17 +282,35 @@ export function syncRosterReadme(
 			changed: false,
 		};
 	}
-	let mode: number | null = null;
-	let source: string | null = null;
+	// Fail-closed read: ONLY genuine absence may mean "create new". Any other
+	// error (permissions, I/O, replacement mid-flight) must stop the sync —
+	// interpreting an observed filesystem error as permission to replace the
+	// file would destroy user-owned text outside the managed block.
+	const readTarget = (): { source: string | null; mode: number | null } => {
+		try {
+			const stats = lstatSync(target);
+			return { mode: stats.mode & 0o777, source: readFileSync(target, "utf8") };
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ENOENT" || code === "ENOTDIR")
+				return { source: null, mode: null };
+			throw new ContainmentError(
+				`cannot read ${target}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	};
+	let expected: { source: string | null; mode: number | null };
 	try {
-		const stats = lstatSync(inspection.path);
-		mode = stats.mode & 0o777;
-		source = readFileSync(inspection.path, "utf8");
-	} catch {
-		mode = null;
-		source = null;
+		expected = readTarget();
+	} catch (error) {
+		return {
+			...inspection,
+			state: "invalid",
+			error: error instanceof Error ? error.message : String(error),
+			changed: false,
+		};
 	}
-	const desired = desiredSource(source, inspection.expectedBlock);
+	const desired = desiredSource(expected.source, inspection.expectedBlock);
 	if (!desired.source)
 		return {
 			...inspection,
@@ -297,18 +318,34 @@ export function syncRosterReadme(
 			error: desired.error,
 			changed: false,
 		};
-	const dir = dirname(inspection.path);
-	const temp = join(dir, `.README.md.${process.pid}.${Date.now()}.tmp`);
+	const temp = join(
+		dirname(target),
+		`.README.md.${process.pid}.${Date.now()}.tmp`,
+	);
 	try {
 		writeFileSync(temp, desired.source, { flag: "wx" });
-		if (mode !== null) chmodSync(temp, mode);
-		renameSync(temp, inspection.path);
+		if (expected.mode !== null) chmodSync(temp, expected.mode);
+		// Rename-boundary compare-and-swap: refuse if the target's bytes
+		// changed since the read this content was computed from.
+		const current = readTarget();
+		if (current.source !== expected.source)
+			throw new ContainmentError(
+				"flows/README.md changed while syncing — re-run md roster sync",
+			);
+		renameSync(temp, target);
 	} catch (error) {
 		try {
 			if (existsSync(temp)) rmSync(temp, { force: true });
 		} catch (cleanupError) {
 			void cleanupError;
 		}
+		if (error instanceof ContainmentError)
+			return {
+				...inspection,
+				state: "invalid",
+				error: error.message,
+				changed: false,
+			};
 		throw error;
 	}
 	const verified = inspectRosterReadme(root);
