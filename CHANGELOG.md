@@ -1,3 +1,10 @@
+# [4.8.0](https://github.com/johnlindquist/mdflow/compare/v4.7.0...v4.8.0) (2026-07-16)
+
+
+### Features
+
+* unified Workbench flow catalog and md capture conversation-capture guide ([e3946dc](https://github.com/johnlindquist/mdflow/commit/e3946dc6664e7ad600b43edfc2d37e9c911a6d82))
+
 # [4.7.0](https://github.com/johnlindquist/mdflow/compare/v4.6.1...v4.7.0) (2026-07-15)
 
 
