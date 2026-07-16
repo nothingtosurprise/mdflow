@@ -32,6 +32,21 @@ Examples:
   md doctor
   md doctor --json | jq '.diagnostics[] | {code, action}'`,
 
+	capture: `Usage: md capture
+
+Print the conversation-capture guide (FREE — no engine call, no writes).
+Run it from INSIDE an agent session (Claude Code, Codex, ...): the printed
+guide teaches that agent to turn the current conversation into a reusable
+flow. It interviews you about what to keep, and converts commands you ran
+during the session (git diff, ls, test runs) into !\`cmd\` context
+injections and @file imports so every future run preloads fresh context.
+
+Examples:
+  md capture            # run from your agent's shell tool, then follow it
+  md capture | pbcopy   # copy the guide to paste into any agent harness
+
+Related: md create (new flow from intent), md init --print-guide`,
+
 	explain: `Usage: md explain <flow.md> [flags] [--json]
 
 Show the fully resolved configuration for a flow without executing it

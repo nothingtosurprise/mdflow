@@ -53,6 +53,13 @@ export const MANAGEMENT_COMMANDS = [
 		json: false,
 	},
 	{
+		name: "capture",
+		usage: "capture",
+		summary:
+			"Print the guide for capturing the current agent conversation as a flow",
+		json: false,
+	},
+	{
 		name: "explain",
 		usage: "explain <flow.md> [--json]",
 		summary: "Resolve one flow without launching its engine",
@@ -188,6 +195,14 @@ export const OPERATIONS = [
 		effect: "LOCAL_WRITE",
 		consent: "explicit-local-effect",
 		sourceMayChange: true,
+	},
+	{
+		id: "flow.capture",
+		command: "md capture",
+		summary:
+			"Print the guide an in-session agent follows to capture the current conversation as a flow",
+		effect: "FREE",
+		consent: "none",
 	},
 	{
 		id: "flow.explain",

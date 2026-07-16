@@ -99,6 +99,7 @@ import {
 	ConfigurationError,
 	TemplateError,
 	ImportError,
+	CommandError,
 } from "./errors";
 import type { RunRecord } from "./telemetry";
 import {
@@ -242,6 +243,61 @@ export function promptPositionals(
 	return interactive && !prompt.trim() ? [] : [prompt];
 }
 
+export interface WorkbenchChildInvocation {
+	executable: string;
+	args: string[];
+}
+
+/** Build an argv-safe relaunch of the currently running mdflow entrypoint. */
+export function buildWorkbenchChildInvocation(
+	currentArgv: readonly string[],
+	selectedFile: string,
+	passthroughArgs: readonly string[],
+): WorkbenchChildInvocation {
+	const executable = currentArgv[0];
+	const entrypoint = currentArgv[1];
+	if (!executable || !entrypoint) {
+		throw new CommandError(
+			"Cannot launch the selected Workbench flow: the current mdflow executable or entrypoint is unavailable.",
+			{
+				errorCode: "COMMAND_EXECUTION_FAILED",
+				context: {
+					argvPrefix: currentArgv.slice(0, 2),
+					selectedFile,
+				},
+			},
+		);
+	}
+
+	return {
+		executable,
+		args: [entrypoint, selectedFile, ...passthroughArgs],
+	};
+}
+
+function definedEnvironment(
+	environment: Record<string, string | undefined>,
+): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(environment).filter(
+			(entry): entry is [string, string] => entry[1] !== undefined,
+		),
+	);
+}
+
+function releaseTerminalForWorkbenchChild(): void {
+	getProcessManager().restoreTerminal();
+	if (process.stdin.isTTY) {
+		try {
+			process.stdin.setRawMode?.(false);
+		} catch {
+			// Best effort: the new process still gets a clean prompt lifecycle.
+		}
+		process.stdin.pause();
+	}
+	if (process.stdout.isTTY) process.stdout.write("\x1b[?25h");
+}
+
 /** Options for CliRunner */
 export interface CliRunnerOptions {
 	env: SystemEnvironment;
@@ -258,6 +314,8 @@ export interface CliRunnerOptions {
 	) => Promise<string>;
 	/** Command executor override for deterministic orchestration tests. */
 	runCommandFn?: typeof runCommand;
+	/** Workbench selection override for deterministic handoff tests. */
+	handleMaCommandsFn?: typeof handleMaCommands;
 }
 
 /** CliRunner - Main orchestrator for mdflow CLI */
@@ -274,6 +332,7 @@ export class CliRunner {
 		defaultValue?: string,
 	) => Promise<string>;
 	private runCommandFn: typeof runCommand;
+	private handleMaCommandsFn: typeof handleMaCommands;
 	private jsonModeState: JsonModeState | null = null;
 
 	constructor(options: CliRunnerOptions) {
@@ -299,6 +358,7 @@ export class CliRunner {
 				return inputFn({ message: msg, default: defaultValue });
 			});
 		this.runCommandFn = options.runCommandFn ?? runCommand;
+		this.handleMaCommandsFn = options.handleMaCommandsFn ?? handleMaCommands;
 	}
 
 	private async readStdin(): Promise<string> {
@@ -732,6 +792,62 @@ export class CliRunner {
 		return { exitCode: 1, errorMessage, logPath };
 	}
 
+	private async launchWorkbenchFlow(
+		currentArgv: readonly string[],
+		selectedFile: string,
+		passthroughArgs: readonly string[],
+	): Promise<CliRunResult> {
+		const invocation = buildWorkbenchChildInvocation(
+			currentArgv,
+			selectedFile,
+			passthroughArgs,
+		);
+		releaseTerminalForWorkbenchChild();
+
+		let child: ReturnType<SystemEnvironment["shell"]["spawn"]>;
+		try {
+			child = this.env.shell.spawn(invocation.executable, invocation.args, {
+				cwd: this.cwd,
+				env: definedEnvironment(this.processEnv),
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+			});
+		} catch (cause) {
+			throw new CommandError(
+				`Failed to launch selected Workbench flow: ${selectedFile}`,
+				{
+					errorCode: "COMMAND_EXECUTION_FAILED",
+					context: { selectedFile, cwd: this.cwd },
+					cause,
+				},
+			);
+		}
+
+		const rawProcess = child._process as
+			| ReturnType<typeof Bun.spawn>
+			| undefined;
+		if (rawProcess) {
+			getProcessManager().register(
+				rawProcess,
+				`mdflow Workbench run: ${selectedFile}`,
+			);
+		}
+
+		try {
+			return { exitCode: await child.exited };
+		} catch (cause) {
+			throw new CommandError(
+				`Selected Workbench flow terminated unexpectedly: ${selectedFile}`,
+				{
+					errorCode: "COMMAND_EXECUTION_FAILED",
+					context: { selectedFile, cwd: this.cwd },
+					cause,
+				},
+			);
+		}
+	}
+
 	private async runInternal(
 		argv: string[],
 		setLogPath: (lp: string | null) => void,
@@ -777,6 +893,13 @@ export class CliRunner {
 				cwd: this.cwd,
 			});
 			return { exitCode: createResult.status === "conflict" ? 1 : 0 };
+		}
+		if (subcommand === "capture") {
+			// FREE: prints the conversation-capture guide for the agent session
+			// this command was invoked from. No engine, no reads, no writes.
+			const { buildCaptureGuide } = await import("./capture");
+			this.writeStdout(buildCaptureGuide());
+			return { exitCode: 0 };
 		}
 		if (subcommand === "setup") {
 			// Setup is an interactive wizard end to end; without a TTY it would
@@ -955,13 +1078,18 @@ export class CliRunner {
 				);
 				throw new ConfigurationError("No agent file specified", 1);
 			}
-			const result = await handleMaCommands(cliArgs);
+			const result = await this.handleMaCommandsFn(cliArgs);
 			if (result.selectedFile) {
-				filePath = result.selectedFile;
-				// If dry-run was selected via Shift+Enter, inject the flag
-				if (result.dryRun) {
-					passthroughArgs = ["--_dry-run", ...passthroughArgs];
+				if (!result.dryRun) {
+					return this.launchWorkbenchFlow(
+						argv,
+						result.selectedFile,
+						passthroughArgs,
+					);
 				}
+				filePath = result.selectedFile;
+				// Shift+Enter keeps the free preview in the current process.
+				passthroughArgs = ["--_dry-run", ...passthroughArgs];
 			} else if (!result.handled) {
 				this.writeStderr("Usage: md <file.md> [flags for command]");
 				this.writeStderr("       md <command> [options]");

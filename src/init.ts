@@ -56,10 +56,7 @@ import type { AgentFrontmatter } from "./types";
 import { ensureFlowIdentity } from "./evolution-core";
 import { resolveProjectRoot } from "./project-root";
 import { renderAgentContractMarkdown } from "./agent-contract";
-import {
-	inspectAgentGuidance,
-	syncAgentGuidance,
-} from "./agent-guidance";
+import { inspectAgentGuidance, syncAgentGuidance } from "./agent-guidance";
 import { inspectRunnableFlowSource, syncRosterReadme } from "./roster-readme";
 
 const ASSETS_DIR = join(import.meta.dir, "..", "assets", "init");
@@ -72,6 +69,15 @@ interface InitOptions {
 	agents: boolean;
 	printGuide: boolean;
 	help: boolean;
+}
+
+export interface FirstRunAvailableFlow {
+	name: string;
+	source: string;
+}
+
+export interface FirstRunSetupOptions {
+	availablePersonalFlows?: readonly FirstRunAvailableFlow[];
 }
 
 interface CatalogEntry {
@@ -318,7 +324,10 @@ export interface ScaffoldResult {
  * on the prose lines — so a refused or failed component can never be
  * summarized into a success.
  */
-export function scaffoldStarterFlows(cwd: string, engine: string): ScaffoldResult {
+export function scaffoldStarterFlows(
+	cwd: string,
+	engine: string,
+): ScaffoldResult {
 	const lines: string[] = [];
 	let refused = 0;
 	let failed = 0;
@@ -591,7 +600,9 @@ export function buildInitReceipt(
 			: `mdflow is ready — ${created} ${created === 1 ? "file" : "files"} created for this project.`,
 	];
 	if (updated > 0)
-		summary.push(`${updated} ${updated === 1 ? "file was" : "files were"} updated.`);
+		summary.push(
+			`${updated} ${updated === 1 ? "file was" : "files were"} updated.`,
+		);
 	if (preserved > 0) {
 		summary.push(
 			`${preserved} existing ${preserved === 1 ? "file was" : "files were"} preserved.`,
@@ -747,9 +758,7 @@ export async function shouldOfferFirstRunSetup(
 			join(roster.projectRoot, ".mdflow", "registry"),
 		]) {
 			try {
-				if (
-					readdirSync(dir).some((name) => name.toLowerCase().endsWith(".md"))
-				)
+				if (readdirSync(dir).some((name) => name.toLowerCase().endsWith(".md")))
 					return false;
 			} catch (error) {
 				const code = (error as NodeJS.ErrnoException).code;
@@ -770,44 +779,61 @@ export async function shouldOfferFirstRunSetup(
  * Returns an exit code when the session was handled here, or null to
  * continue into the normal Workbench.
  */
-export async function runFirstRunSetup(
+function safeTerminalLabel(value: string): string {
+	return value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "�");
+}
+
+export function buildFirstRunIntro(
+	availablePersonalFlows: readonly FirstRunAvailableFlow[],
+): string {
+	const lines = [
+		"No project-owned flows found — mdflow isn't set up in this project yet.",
+	];
+	if (availablePersonalFlows.length > 0) {
+		lines.push(
+			"",
+			"Personal flows already available:",
+			...availablePersonalFlows.map(
+				(flow) =>
+					`  ${safeTerminalLabel(flow.name)} [${safeTerminalLabel(flow.source)}]`,
+			),
+			"",
+			'Choose "Not now" to browse or run them in the Workbench.',
+		);
+	}
+	return lines.join("\n");
+}
+
+export async function executeFirstRunChoice(
+	choice: FirstRunChoice,
 	cwd: string = process.cwd(),
 ): Promise<number | null> {
 	const projectRoot = resolveProjectRoot(cwd).projectRoot;
 	const detected = detectInstalledEngines();
 	const scaffoldEngine = detected[0] ?? DEFAULT_ENGINE;
-	console.log("No flows found — mdflow isn't set up in this project yet.");
 	try {
-		const choice = await select<FirstRunChoice>({
-			message: "How should this project get its flow roster?",
-			choices: buildFirstRunChoices(detected, scaffoldEngine),
-		});
-
 		if (choice.type === "skip") return null;
-
 		if (choice.type === "print") {
 			console.log("");
 			console.log(
-				buildGuidePrompt(detected[0] ?? DEFAULT_ENGINE, detected, loadCatalog()),
+				buildGuidePrompt(
+					detected[0] ?? DEFAULT_ENGINE,
+					detected,
+					loadCatalog(),
+				),
 			);
 			console.error(
 				"\nPaste this prompt into your agent to run the mdflow guided setup.",
 			);
 			return 0;
 		}
-
 		if (choice.type === "guided") {
 			console.log(
 				`Launching ${choice.engine} interactively with the mdflow setup guide — this uses your ${choice.engine} session.`,
 			);
-			const guidePrompt = buildGuidePrompt(
-				choice.engine,
-				detected,
-				loadCatalog(),
-			);
 			const exitCode = await launchGuidedSession(
 				choice.engine,
-				guidePrompt,
+				buildGuidePrompt(choice.engine, detected, loadCatalog()),
 				projectRoot,
 			);
 			console.log("");
@@ -815,8 +841,7 @@ export async function runFirstRunSetup(
 			return exitCode;
 		}
 
-		// Every question comes BEFORE the first write, so a Ctrl+C anywhere in
-		// the conversation genuinely means nothing was written.
+		// Every question comes before the first write.
 		const makePrimary = await confirm({
 			message:
 				"Make flows the primary way agents work in this repo? (adds a managed mdflow section to AGENTS.md and CLAUDE.md)",
@@ -834,7 +859,28 @@ export async function runFirstRunSetup(
 		printInitReceipt(changes);
 		return scaffold.ok && guidanceOk ? 0 : 1;
 	} catch (err) {
-		// Inquirer throws on Ctrl+C — treat as a clean cancel, not a crash.
+		if (err instanceof Error && err.name === "ExitPromptError") {
+			console.log("Cancelled. Nothing written.");
+			return 130;
+		}
+		throw err;
+	}
+}
+
+export async function runFirstRunSetup(
+	cwd: string = process.cwd(),
+	options: FirstRunSetupOptions = {},
+): Promise<number | null> {
+	const detected = detectInstalledEngines();
+	const scaffoldEngine = detected[0] ?? DEFAULT_ENGINE;
+	console.log(buildFirstRunIntro(options.availablePersonalFlows ?? []));
+	try {
+		const choice = await select<FirstRunChoice>({
+			message: "How should this project get its flow roster?",
+			choices: buildFirstRunChoices(detected, scaffoldEngine),
+		});
+		return executeFirstRunChoice(choice, cwd);
+	} catch (err) {
 		if (err instanceof Error && err.name === "ExitPromptError") {
 			console.log("Cancelled. Nothing written.");
 			return 130;

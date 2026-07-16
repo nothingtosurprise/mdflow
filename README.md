@@ -16,11 +16,13 @@ npx mdflow init
 
 One command safely creates a starter `./flows` roster and `.mdflow.yaml` with
 zero engine invocations; repeat runs leave an existing roster untouched. Then
-bare `md` opens the Flow Workbench — and in a project with no owned flow
-roster (canonical `flows/`, legacy `.mdflow/`, or project registry; personal
-global flows don't count), it offers first-run setup instead of an empty
-screen: guided setup with an installed agent CLI, a deterministic scaffold,
-or a printed setup prompt to paste into any agent. Want the repo-tailored setup conversation directly? Run
+bare `md` always opens one searchable Flow Workbench containing project flows,
+every globally installed flow, and runnable Markdown flows found directly on
+`PATH`, with clear `PROJECT`, `GLOBAL`, `INSTALLED`, and `PATH` provenance. If
+the project has no owned roster, global and PATH flows remain
+immediately runnable and a searchable **Set up project flows…** row opens guided
+setup, a deterministic starter roster, or the printable setup guide without
+leaving the Workbench. Want the repo-tailored setup conversation directly? Run
 `md init --guided` (or `md init --print-guide` to copy the same guide into
 your own agent session).
 
@@ -257,11 +259,10 @@ mdflow task.claude.md --verbose --debug
 Run bare `md` for the everyday surface. It works in a new project with zero
 flows and in an established project with a full roster:
 
-- Browse and filter flows with a live Markdown and lifecycle preview.
-- Press `Enter` to run, `d` to dry-run for free, or `e` to edit in `$EDITOR`.
-- Press `n` to turn a plain-language outcome into a new `flows/<slug>.md`.
-- Press `f` to save durable feedback, then `i` to move through evidence → eval
-  → proposal → an explicit apply or rollback decision.
+- Search project, global, installed, and PATH flows together; every row shows its provenance.
+- Press `Enter` to run or `Tab`/`→` to open dry-run, edit, hooks, feedback, and evolution actions.
+- Press `Ctrl+O` to turn a plain-language outcome into a new scoped flow.
+- In a project with no local roster, search for `setup` or select **Set up project flows…**.
 
 Every action displays its exact shell equivalent and whether it is free,
 invokes an engine, or writes locally. The Workbench never auto-applies a prompt
@@ -896,6 +897,9 @@ Commands:
                                 --agents adds AGENTS.md/CLAUDE.md guidance;
                                 --print-guide prints the setup prompt, free)
   md create "<intent>"          Create a project flow (--global for a personal flow)
+  md capture                    Print the guide an in-session agent (Claude Code,
+                                Codex, ...) follows to capture the current
+                                conversation as a flow (free)
   md doctor [--json]            Inspect project readiness + safe next actions (free)
   md explain <agent.md>         Show resolved config without executing
   md render <flow.md>           Render prompt + full config as a shareable HTML page (free)

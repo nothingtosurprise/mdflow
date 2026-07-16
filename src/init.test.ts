@@ -14,6 +14,7 @@ import { join } from "path";
 import {
 	applyAgentGuidance,
 	buildFirstRunChoices,
+	buildFirstRunIntro,
 	buildGuidePrompt,
 	buildInitReceipt,
 	detectInstalledEngines,
@@ -348,6 +349,40 @@ describe("first-run setup", () => {
 		expect(
 			result.lines.some((line) => line.trimStart().startsWith("failed AGENTS.md")),
 		).toBe(true);
+	});
+});
+
+describe("first-run intro", () => {
+	it("stays project-scoped when no personal flows are available", () => {
+		const intro = buildFirstRunIntro([]);
+		expect(intro).toContain("No project-owned flows found");
+		expect(intro).not.toContain("Personal flows already available");
+		expect(intro).not.toContain("No flows found");
+	});
+
+	it("lists personal flows with their source in discovery order", () => {
+		const intro = buildFirstRunIntro([
+			{ name: "personal.md", source: "~/.mdflow" },
+			{ name: "meeting-actions.md", source: "~/.mdflow" },
+		]);
+		expect(intro).toContain("personal.md [~/.mdflow]");
+		expect(intro).toContain("meeting-actions.md [~/.mdflow]");
+		expect(intro).toContain(
+			'Choose "Not now" to browse or run them in the Workbench.',
+		);
+		expect(intro.indexOf("personal.md")).toBeLessThan(
+			intro.indexOf("meeting-actions.md"),
+		);
+	});
+
+	it("neutralizes terminal control characters in flow labels", () => {
+		const intro = buildFirstRunIntro([
+			{ name: "bad\u001b[31m\nname.md", source: "~/.mdflow\r" },
+		]);
+		expect(intro).not.toContain("\u001b");
+		expect(intro).not.toContain("\nname.md");
+		expect(intro).not.toContain("~/.mdflow\r");
+		expect(intro).toContain("bad�[31m�name.md [~/.mdflow�]");
 	});
 });
 

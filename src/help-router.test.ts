@@ -47,11 +47,12 @@ describe("pre-runner global help router", () => {
 		// and render/doctor commands inserted after `md explain`, the --_hooks /
 		// --dry-run-alias flag lines added post-audit, roster sync (--agents),
 		// the eval management subcommand lines (md eval add|list|remove|coverage),
-		// the init --agents/--print-guide flags, and the bare-md first-run note.
-		expect(Buffer.byteLength(help.stdout)).toBe(6297);
+		// the init --agents/--print-guide flags, the project-roster setup note,
+		// and the md capture command.
+		expect(Buffer.byteLength(help.stdout)).toBe(6522);
 		expect(
 			new Bun.CryptoHasher("sha256").update(help.stdout).digest("hex"),
-		).toBe("ef0256a8114cd7b67ca527c94a8c2ea01c47cc03a03b60cf7f1b079dbe292b4e");
+		).toBe("c82af04e3d12f8b757dfe6c9331e146f5d2e8d274ff2d9a4faca7b206a8dc811");
 		expect(help.stdout).toMatchSnapshot();
 	});
 

@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 md <file.md> [flags]     # Run a flow
 md init [-e <eng>] [-y]  # Initialize a flow roster (guided by an agent CLI; -y scaffolds)
 md create [name]         # Create a new flow file
+md capture               # Print the guide an in-session agent follows to capture
+                         # the current conversation as a flow (free; see src/capture.ts)
 md explain <flow.md>     # Show resolved config without executing (free)
 md hooks add|list|remove <flow.md> [event…]  # Manage the flow's lifecycle hooks file (free)
 md eval <flow.md>        # Run the flow's eval suite (costs engine turns; --plan is free)

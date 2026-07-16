@@ -59,6 +59,11 @@
       "description": "Create a flow and a fail-closed draft eval suite"
     },
     {
+      "name": "capture",
+      "usage": "capture",
+      "description": "Print the guide for capturing the current agent conversation as a flow"
+    },
+    {
       "name": "explain",
       "usage": "explain <flow.md> [--json]",
       "description": "Resolve one flow without launching its engine"
@@ -148,6 +153,12 @@
         "name": "create",
         "usage": "create [intent] [--global] [--dry-run]",
         "summary": "Create a flow and a fail-closed draft eval suite",
+        "json": false
+      },
+      {
+        "name": "capture",
+        "usage": "capture",
+        "summary": "Print the guide for capturing the current agent conversation as a flow",
         "json": false
       },
       {
@@ -280,6 +291,13 @@
         "effect": "LOCAL_WRITE",
         "consent": "explicit-local-effect",
         "sourceMayChange": true
+      },
+      {
+        "id": "flow.capture",
+        "command": "md capture",
+        "summary": "Print the guide an in-session agent follows to capture the current conversation as a flow",
+        "effect": "FREE",
+        "consent": "none"
       },
       {
         "id": "flow.explain",

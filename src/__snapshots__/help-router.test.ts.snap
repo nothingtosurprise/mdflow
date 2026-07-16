@@ -14,6 +14,9 @@ Commands:
                                 --agents adds AGENTS.md/CLAUDE.md guidance;
                                 --print-guide prints the setup prompt, free)
   md create "<intent>"          Create a project flow (--global works from any directory)
+  md capture                    Print the guide an in-session agent (Claude Code,
+                                Codex, ...) follows to capture the current
+                                conversation as a flow (free)
   md doctor [--json]            Inspect project readiness + safe next actions (free, read-only)
   md explain <agent.md>         Show resolved config without executing
   md render <flow.md>           Render prompt + full config as a shareable HTML page (free)
@@ -114,7 +117,7 @@ md-specific flags (consumed, not passed to command):
 
 Without arguments:
   md              Open the Flow Workbench: browse, create, run, and improve flows
-                  (on a project with no flows at all, offers first-run setup)
+                  (without a project roster, lists personal flows and offers setup)
 
 "
 `;

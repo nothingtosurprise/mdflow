@@ -34,6 +34,7 @@ Start every maintenance task with `md doctor --json`. Branch on stable diagnosti
 - **FREE** `md init --print-guide` — Print the guided-setup prompt for pasting into any agent harness.
 - **FREE** `md create <intent> --dry-run` — Preview flow creation without writing.
 - **LOCAL_WRITE** `md create <intent>` — Create a flow and fail-closed draft eval suite.
+- **FREE** `md capture` — Print the guide an in-session agent follows to capture the current conversation as a flow.
 - **FREE** `md explain <flow.md> --json` — Resolve one invocation without launching its engine; URL imports and context providers may resolve.
 - **FREE** `md render <flow.md> --json` — Build the render model; imports and context providers may resolve.
 - **LOCAL_WRITE** `md render <flow.md> --out <path>` — Resolve a flow and write rendered HTML.
